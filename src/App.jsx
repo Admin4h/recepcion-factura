@@ -1,13 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import { useSession, useProfile } from './lib/auth';
 import { useInvoices, useCostCenters, useProfiles, uploadInvoicePhoto, fileToBase64, runOCR, logEvent } from './lib/db';
 import { Login } from './components/Login';
 import { InvoiceForm, money } from './components/InvoiceForm';
 
-function Loading() {
-  return <div className="min-h-screen flex items-center justify-center text-slate-500">Cargando...</div>;
-}
+function Loading() { return <div className="min-h-screen flex items-center justify-center text-slate-500">Cargando...</div>; }
 
 export default function App() {
   const { session, loading: sl } = useSession();
@@ -58,14 +56,52 @@ function CargadorPane({ profile, roles }) {
   const buyersList = buyers.filter(b => (b.user_roles || []).some(r => r.role === 'comprador') || (b.user_roles || []).some(r => r.role === 'administracion'));
   const [selected, setSelected] = useState(null);
 
+  const tarjetaInvoices = useMemo(() => myInvoices.filter(i => i.forma_pago === 'tarjeta'), [myInvoices]);
+  const byMonth = useMemo(() => {
+    const groups = {};
+    for (const inv of tarjetaInvoices) {
+      const d = inv.fecha_emision || inv.fecha_gasto || inv.created_at?.slice(0, 10);
+      const key = d ? d.slice(0, 7) : 'sin-fecha';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(inv);
+    }
+    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [tarjetaInvoices]);
+
+  const monthLabel = (yyyymm) => {
+    if (yyyymm === 'sin-fecha') return 'Sin fecha';
+    const [y, m] = yyyymm.split('-');
+    const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    return `${meses[Number(m) - 1]} ${y}`;
+  };
+
   return (
     <div className="space-y-6">
       <UploadForm profile={profile} costCenters={costCenters} onDone={reload} />
       <section>
         <h2 className="text-lg font-semibold text-slate-900 mb-3">Mis facturas</h2>
-        <InvoiceList rows={myInvoices} onOpen={setSelected} />
+        <InvoiceList rows={myInvoices} onOpen={setSelected} showState />
       </section>
-      {selected && <InvoiceForm invoice={selected} costCenters={costCenters} buyers={buyersList} currentProfile={profile} roles={roles} onSave={() => { reload(); setSelected(null); }} onClose={() => setSelected(null)} />}
+      {tarjetaInvoices.length > 0 && (
+        <section>
+          <h2 className="text-lg font-semibold text-slate-900 mb-3">Mi rendicion (tarjeta)</h2>
+          <div className="space-y-4">
+            {byMonth.map(([key, list]) => {
+              const totalMes = list.reduce((s, i) => s + (Number(i.total) || 0), 0);
+              return (
+                <div key={key} className="bg-white rounded-xl border overflow-hidden">
+                  <div className="px-4 py-2 bg-slate-50 flex justify-between items-center">
+                    <div className="font-medium text-slate-900">{monthLabel(key)}</div>
+                    <div className="text-sm text-slate-600">Total: <span className="font-mono font-semibold">{money(totalMes)}</span></div>
+                  </div>
+                  <InvoiceList rows={list} onOpen={setSelected} showState compact />
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+      {selected && <InvoiceForm invoice={selected} costCenters={costCenters} buyers={buyersList} currentProfile={profile} roles={roles} viewAs="cargador" onSave={() => { reload(); setSelected(null); }} onClose={() => setSelected(null)} />}
     </div>
   );
 }
@@ -79,18 +115,24 @@ function CompradorPane({ profile, roles }) {
   const [selected, setSelected] = useState(null);
 
   const reloadAll = () => { reloadAssigned(); reloadBuzon(); };
+  const activas = assigned.filter(i => i.state === 'con_comprador');
+  const historial = assigned.filter(i => i.state !== 'con_comprador');
 
   return (
     <div className="space-y-6">
       <section>
-        <h2 className="text-lg font-semibold text-slate-900 mb-3">Buzon general</h2>
-        <InvoiceList rows={buzon} onOpen={setSelected} />
+        <h2 className="text-lg font-semibold text-slate-900 mb-3">Buzon general <span className="text-slate-400 font-normal text-sm">({buzon.filter(i => !i.con_oc).length} sin OC)</span></h2>
+        <InvoiceList rows={buzon.filter(i => !i.con_oc)} onOpen={setSelected} />
       </section>
       <section>
-        <h2 className="text-lg font-semibold text-slate-900 mb-3">Asignadas a mi</h2>
-        <InvoiceList rows={assigned.filter(i => i.state === 'con_comprador')} onOpen={setSelected} />
+        <h2 className="text-lg font-semibold text-slate-900 mb-3">Asignadas a mi <span className="text-slate-400 font-normal text-sm">({activas.length})</span></h2>
+        <InvoiceList rows={activas} onOpen={setSelected} />
       </section>
-      {selected && <InvoiceForm invoice={selected} costCenters={costCenters} buyers={buyersList} currentProfile={profile} roles={roles} onSave={() => { reloadAll(); setSelected(null); }} onClose={() => setSelected(null)} />}
+      <section>
+        <h2 className="text-lg font-semibold text-slate-900 mb-3">Historial <span className="text-slate-400 font-normal text-sm">({historial.length})</span></h2>
+        <InvoiceList rows={historial} onOpen={setSelected} showState />
+      </section>
+      {selected && <InvoiceForm invoice={selected} costCenters={costCenters} buyers={buyersList} currentProfile={profile} roles={roles} viewAs="comprador" onSave={() => { reloadAll(); setSelected(null); }} onClose={() => setSelected(null)} />}
     </div>
   );
 }
@@ -128,7 +170,7 @@ function AdminFacturas({ profile, roles }) {
         ))}
       </div>
       <InvoiceList rows={filtered} onOpen={setSelected} showState />
-      {selected && <InvoiceForm invoice={selected} costCenters={costCenters} buyers={buyersList} currentProfile={profile} roles={roles} onSave={() => { reload(); setSelected(null); }} onClose={() => setSelected(null)} />}
+      {selected && <InvoiceForm invoice={selected} costCenters={costCenters} buyers={buyersList} currentProfile={profile} roles={roles} viewAs="admin" onSave={() => { reload(); setSelected(null); }} onClose={() => setSelected(null)} />}
     </div>
   );
 }
@@ -136,16 +178,11 @@ function AdminFacturas({ profile, roles }) {
 function AdminUsuarios({ profile }) {
   const { rows: users, reload } = useProfiles();
   const ALL_ROLES = ['cargador', 'comprador', 'administracion'];
-
   async function toggleRole(userId, role, currentlyHas) {
-    if (currentlyHas) {
-      await supabase.from('user_roles').delete().eq('user_id', userId).eq('role', role);
-    } else {
-      await supabase.from('user_roles').insert({ user_id: userId, role });
-    }
+    if (currentlyHas) await supabase.from('user_roles').delete().eq('user_id', userId).eq('role', role);
+    else await supabase.from('user_roles').insert({ user_id: userId, role });
     reload();
   }
-
   return (
     <div className="bg-white rounded-xl border overflow-hidden">
       <table className="w-full text-sm">
@@ -158,9 +195,7 @@ function AdminUsuarios({ profile }) {
                 <td className="px-4 py-2">{u.nombre}</td>
                 <td className="px-4 py-2 text-slate-500">{u.email}</td>
                 {ALL_ROLES.map(role => (
-                  <td key={role} className="px-4 py-2 text-center">
-                    <input type="checkbox" checked={rs.includes(role)} onChange={() => toggleRole(u.id, role, rs.includes(role))} />
-                  </td>
+                  <td key={role} className="px-4 py-2 text-center"><input type="checkbox" checked={rs.includes(role)} onChange={() => toggleRole(u.id, role, rs.includes(role))} /></td>
                 ))}
               </tr>
             );
@@ -194,23 +229,23 @@ function AdminCentros() {
   );
 }
 
-function InvoiceList({ rows, onOpen, showState }) {
+function InvoiceList({ rows, onOpen, showState, compact }) {
   if (!rows.length) return <div className="bg-white rounded-xl border p-6 text-center text-slate-400 text-sm">Sin facturas</div>;
   return (
-    <div className="bg-white rounded-xl border overflow-hidden">
+    <div className={`bg-white ${compact ? '' : 'rounded-xl border'} overflow-hidden`}>
       <table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs text-slate-500">
-          <tr><th className="px-3 py-2 text-left">Fecha</th><th className="px-3 py-2 text-left">Proveedor</th><th className="px-3 py-2 text-left">Comprobante</th><th className="px-3 py-2 text-right">Total</th>{showState && <th className="px-3 py-2">Estado</th>}<th className="px-3 py-2"></th></tr>
-        </thead>
+        {!compact && (
+          <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-3 py-2 text-left">Fecha</th><th className="px-3 py-2 text-left">Proveedor</th><th className="px-3 py-2 text-left">Comprobante</th><th className="px-3 py-2 text-right">Total</th>{showState && <th className="px-3 py-2">Estado</th>}<th className="px-3 py-2"></th></tr></thead>
+        )}
         <tbody>
           {rows.map(r => (
-            <tr key={r.id} className="border-t hover:bg-slate-50">
-              <td className="px-3 py-2 text-slate-600">{r.fecha_emision || r.fecha_gasto || '-'}</td>
-              <td className="px-3 py-2 font-medium">{r.razon_social || r.concepto || '-'}</td>
-              <td className="px-3 py-2 text-slate-600">{r.tipo_comprobante ? r.tipo_comprobante + ' ' : ''}{r.nro_comprobante || '-'}</td>
-              <td className="px-3 py-2 text-right font-mono">{money(r.total, r.moneda)}</td>
+            <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={() => onOpen(r)}>
+              <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{r.fecha_emision || r.fecha_gasto || '-'}</td>
+              <td className="px-3 py-2 font-medium">{r.razon_social || r.concepto || '-'} {r.con_oc && <span className="ml-1 text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">OC</span>}</td>
+              <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{r.tipo_comprobante ? r.tipo_comprobante + ' ' : ''}{r.nro_comprobante || '-'}</td>
+              <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{money(r.total, r.moneda)}</td>
               {showState && <td className="px-3 py-2 text-xs text-center"><StateBadge state={r.state} /></td>}
-              <td className="px-3 py-2 text-right"><button onClick={() => onOpen(r)} className="text-indigo-600 hover:underline text-xs">Abrir</button></td>
+              <td className="px-3 py-2 text-right"><span className="text-indigo-600 hover:underline text-xs">Abrir</span></td>
             </tr>
           ))}
         </tbody>
@@ -220,14 +255,8 @@ function InvoiceList({ rows, onOpen, showState }) {
 }
 
 function StateBadge({ state }) {
-  const colors = {
-    en_buzon: 'bg-amber-100 text-amber-800',
-    con_comprador: 'bg-indigo-100 text-indigo-800',
-    con_admin: 'bg-blue-100 text-blue-800',
-    aprobada: 'bg-emerald-100 text-emerald-800',
-    rechazada: 'bg-rose-100 text-rose-800',
-  };
-  return <span className={`px-2 py-0.5 rounded ${colors[state] || 'bg-slate-100'}`}>{state}</span>;
+  const colors = { en_buzon: 'bg-amber-100 text-amber-800', con_comprador: 'bg-indigo-100 text-indigo-800', con_admin: 'bg-blue-100 text-blue-800', aprobada: 'bg-emerald-100 text-emerald-800', rechazada: 'bg-rose-100 text-rose-800' };
+  return <span className={`px-2 py-0.5 rounded whitespace-nowrap ${colors[state] || 'bg-slate-100'}`}>{state}</span>;
 }
 
 function UploadForm({ profile, costCenters, onDone }) {
@@ -237,6 +266,9 @@ function UploadForm({ profile, costCenters, onDone }) {
   const [tipoCarga, setTipoCarga] = useState('factura');
   const [concepto, setConcepto] = useState('');
   const [total, setTotal] = useState('');
+  const [cuotas, setCuotas] = useState(1);
+  const [conOc, setConOc] = useState(false);
+  const [ocNumero, setOcNumero] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -244,6 +276,7 @@ function UploadForm({ profile, costCenters, onDone }) {
     e.preventDefault();
     if (!file && tipoCarga === 'factura') { alert('Sube una foto de la factura'); return; }
     if (!ccId) { alert('Elegi centro de costo'); return; }
+    if (conOc && !ocNumero.trim()) { alert('Cargar el numero de OC'); return; }
     setBusy(true);
     try {
       let photo_path = null;
@@ -278,13 +311,17 @@ function UploadForm({ profile, costCenters, onDone }) {
         }
       }
       setStatus('Guardando...');
+      const initialState = conOc ? 'con_admin' : 'en_buzon';
       const payload = {
         tipo_carga: tipoCarga,
         cost_center_id: ccId,
         forma_pago: formaPago,
         photo_path,
         uploader_id: profile.id,
-        state: 'en_buzon',
+        state: initialState,
+        con_oc: conOc,
+        oc_numero: conOc ? ocNumero.trim() : null,
+        cuotas: formaPago === 'tarjeta' ? Number(cuotas) || 1 : 1,
         ...ocrFields,
       };
       if (tipoCarga === 'gasto_sin_factura') {
@@ -295,10 +332,10 @@ function UploadForm({ profile, costCenters, onDone }) {
       const { data, error } = await supabase.from('invoices').insert(payload).select().single();
       if (error) throw error;
       await logEvent(data.id, profile.id, 'uploaded', null);
-      setStatus('Listo!');
-      setFile(null); setConcepto(''); setTotal(''); setCcId('');
+      setStatus('Listo! ' + (conOc ? 'Fue directo a Administracion.' : 'Espera derivacion desde Administracion.'));
+      setFile(null); setConcepto(''); setTotal(''); setCcId(''); setConOc(false); setOcNumero(''); setCuotas(1);
       onDone();
-      setTimeout(() => setStatus(''), 2000);
+      setTimeout(() => setStatus(''), 4000);
     } catch (err) { alert('Error: ' + err.message); }
     finally { setBusy(false); }
   }
@@ -324,8 +361,23 @@ function UploadForm({ profile, costCenters, onDone }) {
       <div><label className="block text-sm font-medium mb-1">Forma de pago</label>
         <div className="flex gap-2">{['efectivo','tarjeta','transferencia'].map(fp => <button type="button" key={fp} onClick={() => setFormaPago(fp)} className={`px-3 py-1.5 rounded text-sm capitalize ${formaPago === fp ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>{fp}</button>)}</div>
       </div>
-      {status && <div className="text-sm text-slate-600">{status}</div>}
-      <button disabled={busy} className="px-4 py-2 bg-slate-900 text-white rounded font-medium disabled:opacity-50">{busy ? 'Procesando...' : 'Enviar al buzon'}</button>
+      {formaPago === 'tarjeta' && (
+        <div><label className="block text-sm font-medium mb-1">Cantidad de cuotas</label><input type="number" min="1" max="24" value={cuotas} onChange={e => setCuotas(e.target.value)} className="w-24 border rounded px-2 py-1" /></div>
+      )}
+      <div className="border-t pt-4">
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input type="checkbox" checked={conOc} onChange={e => setConOc(e.target.checked)} className="mt-1" />
+          <div>
+            <div className="font-medium text-sm">La factura ya tiene una OC asociada</div>
+            <div className="text-xs text-slate-500">Va directo a Administracion para verificar contra la OC (saltea comprador).</div>
+          </div>
+        </label>
+        {conOc && (
+          <div className="mt-2"><label className="block text-xs text-slate-500 mb-1">Numero de OC</label><input value={ocNumero} onChange={e => setOcNumero(e.target.value)} className="w-full border rounded px-2 py-1" placeholder="Ej: OC-2026-0123" /></div>
+        )}
+      </div>
+      {status && <div className="text-sm p-3 rounded bg-emerald-50 text-emerald-800">{status}</div>}
+      <button disabled={busy} className="px-4 py-2 bg-slate-900 text-white rounded font-medium disabled:opacity-50">{busy ? 'Procesando...' : 'Enviar'}</button>
     </form>
   );
 }

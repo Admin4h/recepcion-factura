@@ -9,7 +9,7 @@ const money = (n, cur = 'ARS') => {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: cur, minimumFractionDigits: 2 }).format(num);
 };
 
-export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, roles, onSave, onClose }) {
+export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, roles, viewAs, onSave, onClose }) {
   const [form, setForm] = useState(invoice);
   const [photoUrl, setPhotoUrl] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -25,7 +25,15 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, role
   const isAdmin = roles.includes('administracion');
   const isBuyer = roles.includes('comprador');
   const isMyBuyer = invoice?.buyer_id === currentProfile?.id;
-  const canEditFields = isAdmin || (isMyBuyer && invoice?.state === 'con_comprador') || (invoice?.uploader_id === currentProfile?.id && invoice?.state === 'en_buzon');
+  const isMyUpload = invoice?.uploader_id === currentProfile?.id;
+  const state = form.state;
+
+  // Decide qué acciones mostrar segun viewAs (contexto de solapa)
+  // viewAs: 'admin' | 'comprador' | 'cargador'
+  const showAdminActions = isAdmin && viewAs === 'admin';
+  const showBuyerActions = isMyBuyer && state === 'con_comprador' && (viewAs === 'comprador' || (viewAs === 'admin' && !showAdminActions));
+  const showUploaderActions = isMyUpload && state === 'en_buzon' && viewAs === 'cargador';
+  const canEditFields = showAdminActions || showBuyerActions || showUploaderActions;
   const set = (k, v) => setForm({ ...form, [k]: v });
 
   async function save(newState, extra = {}) {
@@ -49,11 +57,16 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, role
         <div className="flex items-center justify-between p-4 border-b">
           <div>
             <span className="text-xs uppercase text-slate-500">Factura</span>
-            <div className="font-semibold">{form.razon_social || 'Sin proveedor'} - {form.nro_comprobante || 's/n'}</div>
-            <div className="text-xs text-slate-500">Estado: <span className="font-medium">{form.state}</span> - Subida por {invoice.uploader?.nombre}</div>
+            <div className="font-semibold">{form.razon_social || form.concepto || 'Sin proveedor'} - {form.nro_comprobante || 's/n'}</div>
+            <div className="text-xs text-slate-500">
+              Estado: <StateBadgeInline state={state} /> - Subida por {invoice.uploader?.nombre}
+              {invoice.buyer?.nombre && <span> - Comprador: {invoice.buyer.nombre}</span>}
+              {form.con_oc && <span> - OC: {form.oc_numero}</span>}
+            </div>
           </div>
           <button onClick={onClose} className="px-3 py-1 text-slate-600 hover:bg-slate-100 rounded">Cerrar</button>
         </div>
+        {form.bounce_reason && <div className="mx-6 mt-4 p-3 bg-rose-50 text-rose-800 text-sm rounded-lg"><b>Motivo rechazo:</b> {form.bounce_reason}</div>}
         <div className="grid md:grid-cols-2 gap-6 p-6">
           <div>
             {photoUrl ? <img src={photoUrl} alt="factura" className="w-full rounded-lg border" /> : <div className="aspect-[3/4] bg-slate-100 rounded-lg flex items-center justify-center text-slate-400">Sin foto</div>}
@@ -74,27 +87,30 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, role
             <Field label="Total mostrado"><div className="text-lg font-semibold">{money(form.total, form.moneda)}</div></Field>
           </div>
         </div>
-        <div className="p-4 border-t bg-slate-50 flex flex-wrap gap-2 justify-end">
-          {canEditFields && <button disabled={saving} onClick={() => save(null)} className="px-4 py-2 bg-slate-200 rounded font-medium">Guardar</button>}
-          {isAdmin && form.state === 'en_buzon' && (
-            <div className="flex gap-2 items-center">
+        <div className="p-4 border-t bg-slate-50 flex flex-wrap gap-2 justify-end items-center">
+          {canEditFields && <button disabled={saving} onClick={() => save(null)} className="px-4 py-2 bg-slate-200 rounded font-medium">Guardar cambios</button>}
+          {showAdminActions && state === 'en_buzon' && !form.con_oc && (
+            <>
               <select value={assignBuyer} onChange={e => setAssignBuyer(e.target.value)} className="border rounded px-2 py-1"><option value="">Elegir comprador...</option>{buyers.map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}</select>
-              <button disabled={!assignBuyer || saving} onClick={() => save('con_comprador', { buyer_id: assignBuyer })} className="px-4 py-2 bg-indigo-600 text-white rounded font-medium disabled:opacity-50">Derivar</button>
-            </div>
+              <button disabled={!assignBuyer || saving} onClick={() => save('con_comprador', { buyer_id: assignBuyer })} className="px-4 py-2 bg-indigo-600 text-white rounded font-medium disabled:opacity-50">Derivar a comprador</button>
+            </>
           )}
-          {isMyBuyer && form.state === 'con_comprador' && (
+          {showBuyerActions && (
             <>
               <button disabled={saving} onClick={() => save('con_admin')} className="px-4 py-2 bg-indigo-600 text-white rounded font-medium">Enviar a admin</button>
               <input placeholder="Motivo rechazo" value={bounceReason} onChange={e => setBounceReason(e.target.value)} className="border rounded px-2 py-1" />
               <button disabled={!bounceReason || saving} onClick={() => save('rechazada', { bounce_reason: bounceReason })} className="px-4 py-2 bg-rose-600 text-white rounded font-medium disabled:opacity-50">Rechazar</button>
             </>
           )}
-          {isAdmin && (form.state === 'con_admin' || form.state === 'con_comprador') && (
+          {showAdminActions && (state === 'con_admin' || (state === 'en_buzon' && form.con_oc)) && (
             <>
               <button disabled={saving} onClick={() => save('aprobada')} className="px-4 py-2 bg-emerald-600 text-white rounded font-medium">Aprobar</button>
               <input placeholder="Motivo rechazo" value={bounceReason} onChange={e => setBounceReason(e.target.value)} className="border rounded px-2 py-1" />
               <button disabled={!bounceReason || saving} onClick={() => save('rechazada', { bounce_reason: bounceReason })} className="px-4 py-2 bg-rose-600 text-white rounded font-medium disabled:opacity-50">Rechazar</button>
             </>
+          )}
+          {showAdminActions && state === 'con_comprador' && (
+            <button disabled={saving} onClick={() => save('en_buzon', { buyer_id: null })} className="px-4 py-2 bg-amber-500 text-white rounded font-medium">Devolver al buzon</button>
           )}
         </div>
       </div>
@@ -109,6 +125,11 @@ function Field({ label, children }) {
       {children}
     </div>
   );
+}
+
+function StateBadgeInline({ state }) {
+  const colors = { en_buzon: 'bg-amber-100 text-amber-800', con_comprador: 'bg-indigo-100 text-indigo-800', con_admin: 'bg-blue-100 text-blue-800', aprobada: 'bg-emerald-100 text-emerald-800', rechazada: 'bg-rose-100 text-rose-800' };
+  return <span className={`px-2 py-0.5 rounded text-xs ${colors[state] || 'bg-slate-100'}`}>{state}</span>;
 }
 
 export { money };
