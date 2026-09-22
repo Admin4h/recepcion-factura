@@ -236,29 +236,24 @@ function applyConceptDict(ocrData, conceptDict) {
 }
 
 async function runOCR(base64, mediaType) {
-  const contentBlock = mediaType === 'application/pdf'
-    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
-    : { type: "image",    source: { type: "base64", media_type: mediaType,          data: base64 } };
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2000,
-      messages: [{
-        role: "user",
-        content: [
-          contentBlock,
-          { type: "text", text: OCR_PROMPT }
-        ]
-      }]
-    })
+  const url = 'https://vuhjqjdpqievjdbacoge.supabase.co/functions/v1/ocr-factura';
+  const key = 'sb_publishable_uON1ciEGIhZrNRdSoHrWjA_oK0YDTxM';
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+    },
+    body: JSON.stringify({ imageBase64: base64, mimeType: mediaType }),
   });
-  if (!response.ok) throw new Error(`OCR HTTP ${response.status}`);
-  const data = await response.json();
-  const text = (data.content || []).map(c => c.text || '').join('');
-  const clean = text.replace(/```json\s*/g, '').replace(/```/g, '').trim();
-  return JSON.parse(clean);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`OCR HTTP ${response.status}: ${errText}`);
+  }
+  const result = await response.json();
+  if (result.error) throw new Error(result.error);
+  return result.data;
 }
 
 // ============================================================================
