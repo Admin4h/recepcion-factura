@@ -52,9 +52,9 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, role
 
   if (!invoice) return null;
   return (
-    <div className="fixed inset-0 bg-slate-900/70 z-50 flex items-start md:items-center justify-center p-2 md:p-8 overflow-auto">
-      <div className="bg-white rounded-2xl w-full max-w-6xl shadow-2xl">
-        <div className="flex items-center justify-between p-4 border-b">
+    <div className="fixed inset-0 bg-slate-900/70 z-50 flex items-center justify-center p-2 md:p-4">
+      <div className="bg-white rounded-2xl w-full max-w-6xl shadow-2xl flex flex-col max-h-[95vh]">
+        <div className="flex items-center justify-between p-4 border-b flex-shrink-0">
           <div>
             <span className="text-xs uppercase text-slate-500">Factura</span>
             <div className="font-semibold">{form.razon_social || form.concepto || 'Sin proveedor'} - {form.nro_comprobante || 's/n'}</div>
@@ -67,7 +67,7 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, role
           <button onClick={onClose} className="px-3 py-1 text-slate-600 hover:bg-slate-100 rounded">Cerrar</button>
         </div>
         {form.bounce_reason && <div className="mx-6 mt-4 p-3 bg-rose-50 text-rose-800 text-sm rounded-lg"><b>Motivo rechazo:</b> {form.bounce_reason}</div>}
-        <div className="grid md:grid-cols-2 gap-6 p-6">
+        <div className="grid md:grid-cols-2 gap-6 p-6 overflow-y-auto flex-1">
           <div>
             {photoUrl ? <img src={photoUrl} alt="factura" className="w-full rounded-lg border" /> : <div className="aspect-[3/4] bg-slate-100 rounded-lg flex items-center justify-center text-slate-400">Sin foto</div>}
           </div>
@@ -87,7 +87,7 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, role
             <Field label="Total mostrado"><div className="text-lg font-semibold">{money(form.total, form.moneda)}</div></Field>
           </div>
         </div>
-        <div className="p-4 border-t bg-slate-50 flex flex-wrap gap-2 justify-end items-center">
+        <div className="p-4 border-t bg-slate-50 flex flex-wrap gap-2 justify-end items-center flex-shrink-0">
           {canEditFields && <button disabled={saving} onClick={() => save(null)} className="px-4 py-2 bg-slate-200 rounded font-medium">Guardar cambios</button>}
           {showAdminActions && state === 'en_buzon' && !form.con_oc && (
             <>
