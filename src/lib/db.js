@@ -84,3 +84,33 @@ export async function runOCR(base64, mimeType) {
 export async function logEvent(invoiceId, actorId, action, note) {
   await supabase.from('invoice_events').insert({ invoice_id: invoiceId, actor_id: actorId, action, note });
 }
+
+const ADMIN_USERS_URL = 'https://vuhjqjdpqievjdbacoge.supabase.co/functions/v1/admin-users';
+
+async function adminCall(body) {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess?.session?.access_token;
+  const apikey = 'sb_publishable_uON1ciEGIhZrNRdSoHrWjA_oK0YDTxM';
+  const res = await fetch(ADMIN_USERS_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': apikey,
+      'Authorization': `Bearer ${token || apikey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || j.ok === false) throw new Error(j.error || `admin-users HTTP ${res.status}`);
+  return j;
+}
+
+export async function adminCreateUser({ email, password, nombre, roles }) {
+  return adminCall({ action: 'create', email, password, nombre, roles });
+}
+export async function adminResetPassword(user_id, password) {
+  return adminCall({ action: 'reset_password', user_id, password });
+}
+export async function adminDeleteUser(user_id) {
+  return adminCall({ action: 'delete', user_id });
+}
