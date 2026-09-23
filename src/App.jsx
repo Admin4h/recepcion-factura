@@ -258,6 +258,7 @@ function AdminUsuarios() {
   const [newEmail, setNewEmail] = useState('');
   const [newPass, setNewPass] = useState('');
   const [newRoles, setNewRoles] = useState(['cargador']);
+  const [newTarjeta, setNewTarjeta] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
@@ -275,9 +276,9 @@ function AdminUsuarios() {
     if (newPass.length < 8) { setMsg('La contrasenia debe tener al menos 8 caracteres.'); return; }
     setBusy(true); setMsg('');
     try {
-      await adminCreateUser({ email: newEmail.trim(), password: newPass, nombre: newNombre.trim(), roles: newRoles });
+      await adminCreateUser({ email: newEmail.trim(), password: newPass, nombre: newNombre.trim(), roles: newRoles, tarjeta: newTarjeta || null });
       setMsg(`Usuario ${newEmail} creado. Anota la contrasenia: ${newPass}`);
-      setNewNombre(''); setNewEmail(''); setNewPass(''); setNewRoles(['cargador']);
+      setNewNombre(''); setNewEmail(''); setNewPass(''); setNewRoles(['cargador']); setNewTarjeta('');
       reload();
     } catch (err) { setMsg('Error: ' + err.message); }
     finally { setBusy(false); }
@@ -308,6 +309,13 @@ function AdminUsuarios() {
           <div><label className="text-xs text-slate-500 block mb-1">Contrasenia inicial</label><input type="text" value={newPass} onChange={e => setNewPass(e.target.value)} required minLength={8} className="w-full border rounded px-2 py-1 font-mono" placeholder="minimo 8 caracteres" /></div>
         </div>
         <div className="flex items-center gap-4 flex-wrap">
+          <span className="text-xs text-slate-500">Tarjeta asignada:</span>
+          <select value={newTarjeta} onChange={e => setNewTarjeta(e.target.value)} className="border rounded px-2 py-1 text-sm">
+            <option value="">Sin tarjeta</option>
+            {TARJETAS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center gap-4 flex-wrap">
           <span className="text-xs text-slate-500">Roles iniciales:</span>
           {ALL_ROLES.map(r => <label key={r} className="text-sm flex items-center gap-1"><input type="checkbox" checked={newRoles.includes(r)} onChange={() => toggleNewRole(r)} /> {r}</label>)}
           <button disabled={busy} className="ml-auto px-4 py-1.5 bg-slate-900 text-white rounded disabled:opacity-50">{busy ? 'Creando...' : 'Crear usuario'}</button>
@@ -317,11 +325,17 @@ function AdminUsuarios() {
 
       <div className="bg-white rounded-xl border overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50"><tr><th className="text-left px-4 py-2">Nombre</th><th className="text-left px-4 py-2">Email</th><th className="px-2 py-2">Cargador</th><th className="px-2 py-2">Comprador</th><th className="px-2 py-2">Admin</th><th className="px-2 py-2">Acciones</th></tr></thead>
+          <thead className="bg-slate-50"><tr><th className="text-left px-4 py-2">Nombre</th><th className="text-left px-4 py-2">Email</th><th className="px-2 py-2">Tarjeta</th><th className="px-2 py-2">Cargador</th><th className="px-2 py-2">Comprador</th><th className="px-2 py-2">Admin</th><th className="px-2 py-2">Acciones</th></tr></thead>
           <tbody>{users.map(u => { const rs = (u.user_roles || []).map(r => r.role); return (
             <tr key={u.id} className="border-t">
               <td className="px-4 py-2">{u.nombre}</td>
               <td className="px-4 py-2 text-slate-500">{u.email}</td>
+              <td className="px-2 py-2">
+                <select value={u.tarjeta || ''} onChange={async e => { await supabase.from('profiles').update({ tarjeta: e.target.value || null }).eq('id', u.id); reload(); }} className="border rounded px-1 py-0.5 text-xs">
+                  <option value="">-</option>
+                  {TARJETAS.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </td>
               {ALL_ROLES.map(role => <td key={role} className="px-2 py-2 text-center"><input type="checkbox" checked={rs.includes(role)} onChange={() => toggleRole(u.id, role, rs.includes(role))} /></td>)}
               <td className="px-2 py-2 whitespace-nowrap">
                 <button onClick={() => resetear(u)} className="text-xs px-2 py-1 border border-slate-300 rounded hover:bg-slate-50">Cambiar contrasenia</button>
@@ -394,7 +408,14 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
   const [ocNumero, setOcNumero] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
-  const [tarjeta, setTarjeta] = useState('');
+  const [tarjeta, setTarjeta] = useState(profile.tarjeta || '');
+  // Auto-set tarjeta cuando cambia el usuario "en nombre de" (admin)
+  useEffect(() => {
+    if (!isAdmin) return;
+    const acting = (allProfiles || []).find(p => p.id === actAsId);
+    setTarjeta(acting?.tarjeta || '');
+    setTitularId(actAsId);
+  }, [actAsId, isAdmin]);
   const [titularId, setTitularId] = useState(profile.id);
   const [actAsId, setActAsId] = useState(profile.id);
   const enNombreDe = isAdmin && actAsId !== profile.id;
@@ -502,7 +523,9 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
           {isAdmin && <div className="text-xs text-slate-700">⚙️ Cargando como admin - puede elegir la tarjeta y el titular libremente.</div>}
           <div>
             <label className="block text-sm font-medium mb-1">Tarjeta <span className="text-rose-500">*</span></label>
-            <div className="grid grid-cols-2 gap-2">{TARJETAS.map(t => <button type="button" key={t} onClick={() => setTarjeta(t)} className={`px-3 py-2 rounded text-sm border ${tarjeta === t ? 'bg-slate-900 text-white border-slate-900' : 'bg-white border-slate-200'}`}>{t}</button>)}</div>
+            {(!isAdmin && profile.tarjeta)
+              ? <div className="px-3 py-2 bg-white rounded border text-sm">{profile.tarjeta} <span className="text-xs text-slate-500">(tu tarjeta asignada)</span></div>
+              : <div className="grid grid-cols-2 gap-2">{TARJETAS.map(t => <button type="button" key={t} onClick={() => setTarjeta(t)} className={`px-3 py-2 rounded text-sm border ${tarjeta === t ? 'bg-slate-900 text-white border-slate-900' : 'bg-white border-slate-200'}`}>{t}</button>)}</div>}
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Titular de la tarjeta <span className="text-rose-500">*</span></label>
