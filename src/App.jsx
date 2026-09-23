@@ -46,6 +46,7 @@ function MainApp({ profile, roles }) {
 
 function CargadorPane({ profile, roles }) {
   const { rows: costCenters } = useCostCenters();
+  const { rows: allProfiles } = useProfiles();
   const { rows: myInvoices, reload } = useInvoices({ uploader_id: profile.id });
   const { rows: buyers } = useProfiles();
   const buyersList = buyers.filter(b => (b.user_roles || []).some(r => r.role === 'comprador' || r.role === 'administracion'));
@@ -69,7 +70,7 @@ function CargadorPane({ profile, roles }) {
   };
   return (
     <div className="space-y-6">
-      <UploadForm profile={profile} costCenters={costCenters} onDone={reload} />
+      <UploadForm profile={profile} roles={roles} costCenters={costCenters} allProfiles={allProfiles} onDone={reload} />
       <section><h2 className="text-lg font-semibold text-slate-900 mb-3">Mis facturas</h2><InvoiceList rows={myInvoices} onOpen={setSelected} showState /></section>
       {tarjetaInvoices.length > 0 && (
         <section>
@@ -312,7 +313,11 @@ function StateBadge({ state }) {
   return <span className={`px-2 py-0.5 rounded whitespace-nowrap ${c[state] || 'bg-slate-100'}`}>{state}</span>;
 }
 
-function UploadForm({ profile, costCenters, onDone }) {
+const TARJETAS = ['Visa Macro', 'Visa Santander', 'Visa Galicia', 'Amex'];
+
+function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
+  const isAdmin = (roles || []).includes('administracion');
+  const cargadores = (allProfiles || []).filter(p => (p.user_roles || []).some(r => r.role === 'cargador'));
   const [file, setFile] = useState(null);
   const [ccId, setCcId] = useState('');
   const [formaPago, setFormaPago] = useState('efectivo');
@@ -324,6 +329,10 @@ function UploadForm({ profile, costCenters, onDone }) {
   const [ocNumero, setOcNumero] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tarjeta, setTarjeta] = useState('');
+  const [titularId, setTitularId] = useState(profile.id);
+  const [actAsId, setActAsId] = useState(profile.id);
+  const enNombreDe = isAdmin && actAsId !== profile.id;
 
   async function submit(e) {
     e.preventDefault();
@@ -373,20 +382,28 @@ function UploadForm({ profile, costCenters, onDone }) {
       }
       setStatus('Guardando...');
       const initialState = conOc ? 'con_admin' : 'en_buzon';
+      const uploaderId = isAdmin ? actAsId : profile.id;
       const payload = {
         tipo_carga: tipoCarga, cost_center_id: ccId, forma_pago: formaPago, photo_path,
-        uploader_id: profile.id, state: initialState, con_oc: conOc,
+        uploader_id: uploaderId, state: initialState, con_oc: conOc,
         oc_numero: conOc ? ocNumero.trim() : null,
         cuotas: formaPago === 'tarjeta' ? Number(cuotas)||1 : 1,
+        tarjeta: formaPago === 'tarjeta' ? (tarjeta || null) : null,
+        titular_id: formaPago === 'tarjeta' ? (titularId || uploaderId) : null,
         ...ocrFields,
       };
       if (tipoCarga === 'gasto_sin_factura') {
         payload.concepto = concepto; payload.total = total || null;
         payload.fecha_gasto = new Date().toISOString().slice(0,10);
       }
-      const { data, error } = await supabase.from('invoices').insert(payload).select().single();
+      let { data, error } = await supabase.from('invoices').insert(payload).select().single();
+      if (error && /(tarjeta|titular_id)/i.test(error.message || '')) {
+        // Fallback si las columnas nuevas todavia no existen en la DB
+        const { tarjeta: _t, titular_id: _ti, ...safe } = payload;
+        ({ data, error } = await supabase.from('invoices').insert(safe).select().single());
+      }
       if (error) throw error;
-      await logEvent(data.id, profile.id, 'uploaded', null);
+      await logEvent(data.id, profile.id, 'uploaded', enNombreDe ? `en nombre de ${(cargadores.find(c => c.id === actAsId) || {}).nombre || ''}` : null);
       // Guardar conceptos no clasificados restantes
       if (conceptosNoClasif.length) {
         await supabase.from('learning_inbox').insert(conceptosNoClasif.map(c => ({
@@ -394,7 +411,7 @@ function UploadForm({ profile, costCenters, onDone }) {
         })));
       }
       setStatus('Listo! ' + (conOc ? 'Fue directo a Administracion.' : 'Espera derivacion.'));
-      setFile(null); setConcepto(''); setTotal(''); setCcId(''); setConOc(false); setOcNumero(''); setCuotas(1);
+      setFile(null); setConcepto(''); setTotal(''); setCcId(''); setConOc(false); setOcNumero(''); setCuotas(1); setTarjeta(''); setTitularId(profile.id); setActAsId(profile.id);
       onDone();
       setTimeout(() => setStatus(''), 4000);
     } catch (err) { alert('Error: ' + err.message); }
@@ -414,8 +431,36 @@ function UploadForm({ profile, costCenters, onDone }) {
         <div><label className="block text-sm font-medium mb-1">Monto</label><input type="number" step="0.01" value={total} onChange={e => setTotal(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
       </>}
       <div><label className="block text-sm font-medium mb-1">Centro de costo</label><select required value={ccId} onChange={e => setCcId(e.target.value)} className="w-full border rounded px-2 py-1"><option value="">Elegi...</option>{costCenters.map(cc => <option key={cc.id} value={cc.id}>{cc.codigo} - {cc.nombre}</option>)}</select></div>
-      <div><label className="block text-sm font-medium mb-1">Forma de pago</label><div className="flex gap-2">{['efectivo','tarjeta','transferencia'].map(fp => <button type="button" key={fp} onClick={() => setFormaPago(fp)} className={`px-3 py-1.5 rounded text-sm capitalize ${formaPago === fp ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>{fp}</button>)}</div></div>
-      {formaPago === 'tarjeta' && <div><label className="block text-sm font-medium mb-1">Cantidad de cuotas</label><input type="number" min="1" max="24" value={cuotas} onChange={e => setCuotas(e.target.value)} className="w-24 border rounded px-2 py-1" /></div>}
+      <div><label className="block text-sm font-medium mb-1">Forma de pago <span className="text-rose-500">*</span></label><div className="flex gap-2">{[['efectivo','Efectivo'],['tarjeta','Tarjeta'],['transferencia','Transf. u otro']].map(([fp,label]) => <button type="button" key={fp} onClick={() => setFormaPago(fp)} className={`flex-1 px-3 py-2 rounded text-sm border ${formaPago === fp ? 'bg-slate-900 text-white border-slate-900' : 'bg-white border-slate-200'}`}>{label}</button>)}</div></div>
+      {formaPago === 'tarjeta' && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-3">
+          {isAdmin && <div className="text-xs text-slate-700">⚙️ Cargando como admin - puede elegir la tarjeta y el titular libremente.</div>}
+          <div>
+            <label className="block text-sm font-medium mb-1">Tarjeta <span className="text-rose-500">*</span></label>
+            <div className="grid grid-cols-2 gap-2">{TARJETAS.map(t => <button type="button" key={t} onClick={() => setTarjeta(t)} className={`px-3 py-2 rounded text-sm border ${tarjeta === t ? 'bg-slate-900 text-white border-slate-900' : 'bg-white border-slate-200'}`}>{t}</button>)}</div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Titular de la tarjeta <span className="text-rose-500">*</span></label>
+            {isAdmin
+              ? <select value={titularId} onChange={e => setTitularId(e.target.value)} className="w-full border rounded px-2 py-1"><option value="">Elegir titular...</option>{cargadores.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select>
+              : <div className="px-2 py-1 bg-white rounded border text-sm">{profile.nombre}</div>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Cantidad de cuotas</label>
+            <input type="number" min="1" max="24" value={cuotas} onChange={e => setCuotas(e.target.value)} className="w-24 border rounded px-2 py-1" />
+          </div>
+        </div>
+      )}
+      {isAdmin && (
+        <div className={`rounded-lg border p-3 ${enNombreDe ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
+          <label className="block text-sm font-medium mb-1">Cargar en nombre de <span className="text-xs text-slate-500 font-normal">(solo admin)</span></label>
+          <select value={actAsId} onChange={e => setActAsId(e.target.value)} className="w-full border rounded px-2 py-1">
+            <option value={profile.id}>{profile.nombre} (yo)</option>
+            {cargadores.filter(c => c.id !== profile.id).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+          {enNombreDe && <div className="text-xs text-amber-800 mt-1">La factura queda registrada como cargada por {(cargadores.find(c => c.id === actAsId) || {}).nombre}, y el historial anota que la subiste vos en su nombre.</div>}
+        </div>
+      )}
       <div className="border-t pt-4">
         <label className="flex items-start gap-2 cursor-pointer"><input type="checkbox" checked={conOc} onChange={e => setConOc(e.target.checked)} className="mt-1" /><div><div className="font-medium text-sm">La factura ya tiene una OC asociada</div><div className="text-xs text-slate-500">Va directo a Administracion (saltea comprador).</div></div></label>
         {conOc && <div className="mt-2"><label className="block text-xs text-slate-500 mb-1">Numero de OC</label><input value={ocNumero} onChange={e => setOcNumero(e.target.value)} className="w-full border rounded px-2 py-1" placeholder="Ej: OC-2026-0123" /></div>}
