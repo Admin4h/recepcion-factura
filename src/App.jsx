@@ -88,21 +88,38 @@ function CargadorPane({ profile, roles }) {
 }
 
 function CompradorPane({ profile, roles }) {
+  const isAdmin = roles.includes('administracion');
   const { rows: costCenters } = useCostCenters();
-  const { rows: assigned, reload: reloadAssigned } = useInvoices({ buyer_id: profile.id });
-  const { rows: buzon, reload: reloadBuzon } = useInvoices({ state: 'en_buzon' });
   const { rows: buyers } = useProfiles();
   const buyersList = buyers.filter(b => (b.user_roles || []).some(r => r.role === 'comprador' || r.role === 'administracion'));
+  const soloCompradores = buyers.filter(b => (b.user_roles || []).some(r => r.role === 'comprador'));
+  const [actingId, setActingId] = useState(profile.id);
+  const acting = actingId === profile.id ? profile : (buyers.find(b => b.id === actingId) || profile);
+  const actingRoles = actingId === profile.id ? roles : Array.from(new Set([...(acting.user_roles || []).map(r => r.role), 'comprador']));
+  const enNombreDe = actingId !== profile.id;
+  const { rows: assigned, reload: reloadAssigned } = useInvoices({ buyer_id: actingId });
+  const { rows: buzon, reload: reloadBuzon } = useInvoices({ state: 'en_buzon' });
   const [selected, setSelected] = useState(null);
   const reloadAll = () => { reloadAssigned(); reloadBuzon(); };
   const activas = assigned.filter(i => i.state === 'con_comprador');
   const historial = assigned.filter(i => i.state !== 'con_comprador');
+  const titulo = enNombreDe ? `Asignadas a ${acting.nombre}` : 'Asignadas a mi';
   return (
     <div className="space-y-6">
+      {isAdmin && (
+        <div className={`flex flex-wrap items-center gap-2 p-3 rounded-lg border ${enNombreDe ? 'bg-amber-50 border-amber-300' : 'bg-white'}`}>
+          <span className="text-sm font-medium text-slate-700">Ver y actuar como comprador:</span>
+          <select value={actingId} onChange={e => { setActingId(e.target.value); setSelected(null); }} className="border rounded px-2 py-1 text-sm">
+            <option value={profile.id}>{profile.nombre} (yo)</option>
+            {soloCompradores.filter(b => b.id !== profile.id).map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}
+          </select>
+          {enNombreDe && <span className="text-sm text-amber-800">Todo lo que haga queda registrado a su nombre, en nombre de {acting.nombre}.</span>}
+        </div>
+      )}
       <section><h2 className="text-lg font-semibold text-slate-900 mb-3">Buzon general <span className="text-slate-400 font-normal text-sm">({buzon.filter(i => !i.con_oc).length})</span></h2><InvoiceList rows={buzon.filter(i => !i.con_oc)} onOpen={setSelected} /></section>
-      <section><h2 className="text-lg font-semibold text-slate-900 mb-3">Asignadas a mi <span className="text-slate-400 font-normal text-sm">({activas.length})</span></h2><InvoiceList rows={activas} onOpen={setSelected} /></section>
+      <section><h2 className="text-lg font-semibold text-slate-900 mb-3">{titulo} <span className="text-slate-400 font-normal text-sm">({activas.length})</span></h2><InvoiceList rows={activas} onOpen={setSelected} /></section>
       <section><h2 className="text-lg font-semibold text-slate-900 mb-3">Historial <span className="text-slate-400 font-normal text-sm">({historial.length})</span></h2><InvoiceList rows={historial} onOpen={setSelected} showState /></section>
-      {selected && <InvoiceForm invoice={selected} costCenters={costCenters} buyers={buyersList} currentProfile={profile} roles={roles} viewAs="comprador" onSave={() => { reloadAll(); setSelected(null); }} onClose={() => setSelected(null)} />}
+      {selected && <InvoiceForm invoice={selected} costCenters={costCenters} buyers={buyersList} currentProfile={acting} realProfile={profile} roles={actingRoles} viewAs="comprador" onSave={() => { reloadAll(); setSelected(null); }} onClose={() => setSelected(null)} />}
     </div>
   );
 }
