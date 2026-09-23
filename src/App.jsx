@@ -409,6 +409,8 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [tarjeta, setTarjeta] = useState(profile.tarjeta || '');
+  const [titularId, setTitularId] = useState(profile.id);
+  const [actAsId, setActAsId] = useState(profile.id);
   // Auto-set tarjeta cuando cambia el usuario "en nombre de" (admin)
   useEffect(() => {
     if (!isAdmin) return;
@@ -416,8 +418,6 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
     setTarjeta(acting?.tarjeta || '');
     setTitularId(actAsId);
   }, [actAsId, isAdmin]);
-  const [titularId, setTitularId] = useState(profile.id);
-  const [actAsId, setActAsId] = useState(profile.id);
   const enNombreDe = isAdmin && actAsId !== profile.id;
 
   async function submit(e) {
