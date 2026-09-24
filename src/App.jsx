@@ -578,10 +578,27 @@ function AdminCashFlow() {
 }
 
 function TangoUploader() {
+  const COLS_PAGOS = ['A. Fecha vto','B. Tipo comprobante','C. Nro comprobante','D. Fecha emision','F. Cod. clasif.','G. Desc. clasif.','H. Cod. prov.','I. Razon social','K. Nro doc contacto','W. Provincia','AE. Total pendiente CTE'];
+  const COLS_PENDIENTES = ['C. Nro OC','D. Cod. prov.','E. Razon social','G. Fecha emision','L. Condicion compra','M. Cod. clasif. (IF)','P. Provincia','Q. Pendiente sin impuestos','W. Desc. clasif.','AI. Estado del renglon'];
   return (
-    <div className="grid md:grid-cols-2 gap-4">
-      <TangoDropZone tipo="pagos"       label="Pagos a realizar"        hint="Reporte de Tango con las OP a emitir. Se cargan como G-Pago a Proveedores." />
-      <TangoDropZone tipo="pendientes"  label="Pendientes de facturar"  hint="OCs pendientes de facturar. Se proyectan como H-Pago a Prov Proyectados a 30/60 dias segun condicion de compra." />
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-slate-700">
+        <div className="font-medium text-slate-900 mb-2">Recordatorio: columnas que tiene que traer cada Excel de Tango</div>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <div className="font-medium text-blue-900 mb-1">Pagos a realizar</div>
+            <ul className="list-disc list-inside space-y-0.5">{COLS_PAGOS.map(c => <li key={c}>{c}</li>)}</ul>
+          </div>
+          <div>
+            <div className="font-medium text-blue-900 mb-1">Pendientes de facturar</div>
+            <ul className="list-disc list-inside space-y-0.5">{COLS_PENDIENTES.map(c => <li key={c}>{c}</li>)}</ul>
+          </div>
+        </div>
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        <TangoDropZone tipo="pagos"       label="Pagos a realizar"        hint="Se cargan como G-Pago a Proveedores." />
+        <TangoDropZone tipo="pendientes"  label="Pendientes de facturar"  hint="Se proyectan como H-Pago a Prov Proyectados a 30/60 dias segun condicion de compra." />
+      </div>
     </div>
   );
 }
