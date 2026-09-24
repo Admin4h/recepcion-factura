@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 import { useSession, useProfile } from './lib/auth';
-import { useInvoices, useCostCenters, useProfiles, uploadInvoicePhoto, fileToBase64, runOCR, logEvent, adminCreateUser, adminResetPassword, adminDeleteUser } from './lib/db';
+import { useInvoices, useCostCenters, useProfiles, uploadInvoicePhoto, fileToBase64, runOCR, logEvent, adminCreateUser, adminResetPassword, adminDeleteUser , adminTangoImport, useCashFlowRows, useImportBatches } from './lib/db';
 import { Login } from './components/Login';
 import { InvoiceForm, money } from './components/InvoiceForm';
 
@@ -130,13 +130,14 @@ function AdminPane({ profile, roles }) {
   return (
     <div>
       <div className="flex gap-2 mb-4 flex-wrap">
-        {[['tablero','Tablero'],['facturas','Facturas'],['conceptos','Conceptos'],['usuarios','Usuarios'],['centros','Centros de costo']].map(([k, l]) => <button key={k} onClick={() => setSub(k)} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${sub === k ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}`}>{l}</button>)}
+        {[['tablero','Tablero'],['facturas','Facturas'],['conceptos','Conceptos'],['usuarios','Usuarios'],['centros','Centros de costo'],['cashflow','Cash Flow']].map(([k, l]) => <button key={k} onClick={() => setSub(k)} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${sub === k ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}`}>{l}</button>)}
       </div>
       {sub === 'tablero' && <AdminTablero />}
       {sub === 'facturas' && <AdminFacturas profile={profile} roles={roles} />}
       {sub === 'conceptos' && <AdminConceptos />}
       {sub === 'usuarios' && <AdminUsuarios />}
       {sub === 'centros' && <AdminCentros />}
+      {sub === 'cashflow' && <AdminCashFlow />}
     </div>
   );
 }
@@ -556,5 +557,165 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
       {status && <div className="text-sm p-3 rounded bg-emerald-50 text-emerald-800">{status}</div>}
       <button disabled={busy} className="px-4 py-2 bg-slate-900 text-white rounded font-medium disabled:opacity-50">{busy ? 'Procesando...' : 'Enviar'}</button>
     </form>
+  );
+}
+
+// ============ CASH FLOW ============
+function AdminCashFlow() {
+  const [subtab, setSubtab] = useState('subir');
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2 flex-wrap">
+        {[['subir','Subir reportes'],['flujo','Cash Flow'],['batches','Historial de subidas']].map(([k,l]) => (
+          <button key={k} onClick={() => setSubtab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${subtab === k ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}`}>{l}</button>
+        ))}
+      </div>
+      {subtab === 'subir'   && <TangoUploader />}
+      {subtab === 'flujo'   && <CashFlowTable />}
+      {subtab === 'batches' && <ImportBatchList />}
+    </div>
+  );
+}
+
+function TangoUploader() {
+  return (
+    <div className="grid md:grid-cols-2 gap-4">
+      <TangoDropZone tipo="pagos"       label="Pagos a realizar"        hint="Reporte de Tango con las OP a emitir. Se cargan como G-Pago a Proveedores." />
+      <TangoDropZone tipo="pendientes"  label="Pendientes de facturar"  hint="OCs pendientes de facturar. Se proyectan como H-Pago a Prov Proyectados a 30/60 dias segun condicion de compra." />
+    </div>
+  );
+}
+
+function TangoDropZone({ tipo, label, hint }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [err, setErr] = useState(null);
+  async function onFile(e) {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setBusy(true); setMsg(null); setErr(null);
+    try {
+      const b64 = await fileToBase64(f);
+      const b64clean = String(b64).split(',').pop();
+      const r = await adminTangoImport({ tipo, filename: f.name, file_b64: b64clean });
+      const w = (r.warnings || []).length;
+      setMsg(`OK · ${r.rows_created} filas cargadas · ${r.rows_skipped} descartadas${w ? ` · ${w} advertencias` : ''}`);
+    } catch (ex) {
+      setErr(ex.message || String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="bg-white rounded-xl border p-4 space-y-2">
+      <div className="font-medium text-slate-800">{label}</div>
+      <div className="text-xs text-slate-500">{hint}</div>
+      <label className={`block border-2 border-dashed rounded-lg p-6 text-center text-sm cursor-pointer ${busy ? 'bg-slate-50 text-slate-400' : 'hover:bg-slate-50 text-slate-700'}`}>
+        <input type="file" accept=".xlsx,.xls" onChange={onFile} disabled={busy} className="hidden" />
+        {busy ? 'Procesando...' : 'Arrastre el archivo o toque para elegir'}
+      </label>
+      {msg && <div className="text-sm p-2 rounded bg-emerald-50 text-emerald-800">{msg}</div>}
+      {err && <div className="text-sm p-2 rounded bg-rose-50 text-rose-800">Error: {err}</div>}
+    </div>
+  );
+}
+
+function CashFlowTable() {
+  const [concepto, setConcepto] = useState('');
+  const [desde, setDesde] = useState('');
+  const [hasta, setHasta] = useState('');
+  const filters = useMemo(() => {
+    const f = {};
+    if (concepto) f.concepto = concepto;
+    if (desde) f.desde = desde;
+    if (hasta) f.hasta = hasta;
+    return f;
+  }, [concepto, desde, hasta]);
+  const { rows, loading, reload } = useCashFlowRows(filters);
+  const conceptos = ['G-Pago a Proveedores', 'H-Pago a Prov Proyectados', 'I-Pago a Prov SIN OC', 'A-Ds por Ventas', 'D-Ing Fin', 'L-Impuestos', 'P-Otros Egr', 'Q-Trans e/ Cuentas'];
+  const total = rows.reduce((a, r) => a + Number(r.importe || 0), 0);
+  const fmt = (n) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n || 0);
+  return (
+    <div className="space-y-3">
+      <div className="bg-white rounded-xl border p-3 flex gap-3 items-end flex-wrap">
+        <div>
+          <label className="block text-xs text-slate-500">Concepto</label>
+          <select value={concepto} onChange={e => setConcepto(e.target.value)} className="border rounded px-2 py-1 text-sm">
+            <option value="">Todos</option>
+            {conceptos.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-500">Desde VTO</label>
+          <input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="border rounded px-2 py-1 text-sm" />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-500">Hasta VTO</label>
+          <input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="border rounded px-2 py-1 text-sm" />
+        </div>
+        <button onClick={reload} className="px-3 py-1.5 bg-slate-900 text-white rounded text-sm">Actualizar</button>
+        <div className="ml-auto text-right">
+          <div className="text-xs text-slate-500">Total ({rows.length} filas)</div>
+          <div className="text-lg font-bold text-slate-800">{fmt(total)}</div>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl border overflow-x-auto">
+        {loading ? <div className="p-6 text-center text-slate-500">Cargando...</div> : (
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+              <tr>
+                <th className="text-left px-3 py-2">VTO</th>
+                <th className="text-left px-3 py-2">Comprob</th>
+                <th className="text-left px-3 py-2">Razon social</th>
+                <th className="text-left px-3 py-2">Concepto</th>
+                <th className="text-left px-3 py-2">IF/CC</th>
+                <th className="text-left px-3 py-2">Prov</th>
+                <th className="text-right px-3 py-2">Importe</th>
+                <th className="text-left px-3 py-2">Origen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id} className="border-t hover:bg-slate-50">
+                  <td className="px-3 py-1.5 whitespace-nowrap">{r.fecha_vto || '-'}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap">{r.nro_comprobante || '-'}</td>
+                  <td className="px-3 py-1.5">{r.razon_social}</td>
+                  <td className="px-3 py-1.5 text-xs">{r.concepto}</td>
+                  <td className="px-3 py-1.5 text-xs">{r.if_cc || '-'}</td>
+                  <td className="px-3 py-1.5 text-xs">{r.provincia || '-'}</td>
+                  <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmt(Number(r.importe))}</td>
+                  <td className="px-3 py-1.5 text-xs text-slate-500">{r.origen}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-slate-500">Sin filas</td></tr>}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ImportBatchList() {
+  const { rows, reload } = useImportBatches();
+  return (
+    <div className="bg-white rounded-xl border">
+      <div className="p-3 border-b flex justify-between items-center">
+        <div className="font-medium">Ultimas subidas</div>
+        <button onClick={reload} className="text-sm text-slate-600 hover:text-slate-900">Actualizar</button>
+      </div>
+      {rows.length === 0 && <div className="p-6 text-center text-slate-500 text-sm">Sin subidas registradas.</div>}
+      {rows.map(b => (
+        <div key={b.id} className="px-4 py-3 border-t flex gap-4 items-center text-sm">
+          <div className="flex-1">
+            <div className="font-medium">{b.filename || '(sin nombre)'}</div>
+            <div className="text-xs text-slate-500">{b.tipo} · {new Date(b.created_at).toLocaleString('es-AR')}</div>
+          </div>
+          <div className="text-emerald-700 font-medium">+{b.rows_created}</div>
+          <div className="text-slate-500 text-xs">skip {b.rows_skipped}</div>
+        </div>
+      ))}
+    </div>
   );
 }
