@@ -650,9 +650,41 @@ function CashFlowTable() {
     return f;
   }, [concepto, desde, hasta]);
   const { rows, loading, reload } = useCashFlowRows(filters);
-  const conceptos = ['G-Pago a Proveedores', 'H-Pago a Prov Proyectados', 'I-Pago a Prov SIN OC', 'A-Ds por Ventas', 'D-Ing Fin', 'L-Impuestos', 'P-Otros Egr', 'Q-Trans e/ Cuentas'];
-  const total = rows.reduce((a, r) => a + Number(r.importe || 0), 0);
-  const fmt = (n) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n || 0);
+  const conceptos = ['G-Pago a Proveedores','H-Pago a Prov Proyectados','I-Pago a Prov SIN OC','A-Ds por Ventas','D-Ing Fin','L-Impuestos','P-Otros Egr','Q-Trans e/ Cuentas'];
+  const controlOpts = ['SI','NO','parcial'];
+  const rowsWithSaldo = useMemo(() => {
+    let s = 0;
+    return rows.map(r => {
+      const m = Number(r.importe||0), i = Number(r.idc||0), b = Number(r.iibb||0), b2 = Number(r.iibb_l156||0), va = Number(r.vac||0), iv = Number(r.iva_ret||0), i2 = Number(r.idc2||0), i3 = Number(r.idc3||0);
+      s = s + m - i - b - b2 - va - iv - i2 - i3;
+      return { ...r, saldo_final: s };
+    });
+  }, [rows]);
+  const totalMonto = rows.reduce((a, r) => a + Number(r.importe || 0), 0);
+  const fmt = (n) => n == null ? '-' : new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 }).format(Number(n) || 0);
+  async function updateCell(id, field, value) {
+    await supabase.from('cash_flow_rows').update({ [field]: value }).eq('id', id);
+    reload();
+  }
+  async function updateNum(id, field, value) {
+    const n = Number(String(value).replace(',', '.'));
+    if (isNaN(n)) return;
+    await updateCell(id, field, n);
+  }
+  async function exportMacro() {
+    try {
+      const mod = await import('https://esm.sh/xlsx@0.18.5');
+      const XLSX = mod.default || mod;
+      const data = [['Control','EMISION','VTO','NUMERO','','PROVEEDOR','COND.','MOVIMIENTO BANCARIO','IF / CC','OC / PE','DETALLE','JURISDICCION','ACCION','MONTO','IDC','IIBB','IIBB L.156 DGR','VAC','IVA','IDC 2','IDC 3','Saldo Final','hoy']];
+      for (const r of rowsWithSaldo) {
+        data.push([r.control||'NO',r.fecha_emision||'',r.fecha_vto||'',r.nro_comprobante||'',r.codigo_prov||'',r.razon_social||'',r.condicion_compra||'',r.concepto||'',r.if_cc||'',r.oc_pe||'',r.detalle||'',r.jurisdiccion||'',r.accion||'',Number(r.importe)||0,Number(r.idc)||0,Number(r.iibb)||0,Number(r.iibb_l156)||0,Number(r.vac)||0,Number(r.iva_ret)||0,Number(r.idc2)||0,Number(r.idc3)||0,Number(r.saldo_final)||0,new Date().toISOString().slice(0,10)]);
+      }
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'MACRO');
+      XLSX.writeFile(wb, `cash_flow_MACRO_${new Date().toISOString().slice(0,10)}.xlsx`);
+    } catch (e) { alert('Error exportando: ' + e.message); }
+  }
   return (
     <div className="space-y-3">
       <div className="bg-white rounded-xl border p-3 flex gap-3 items-end flex-wrap">
@@ -663,54 +695,67 @@ function CashFlowTable() {
             {conceptos.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
-        <div>
-          <label className="block text-xs text-slate-500">Desde VTO</label>
-          <input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="border rounded px-2 py-1 text-sm" />
-        </div>
-        <div>
-          <label className="block text-xs text-slate-500">Hasta VTO</label>
-          <input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="border rounded px-2 py-1 text-sm" />
-        </div>
+        <div><label className="block text-xs text-slate-500">Desde VTO</label><input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="border rounded px-2 py-1 text-sm" /></div>
+        <div><label className="block text-xs text-slate-500">Hasta VTO</label><input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="border rounded px-2 py-1 text-sm" /></div>
         <button onClick={reload} className="px-3 py-1.5 bg-slate-900 text-white rounded text-sm">Actualizar</button>
-        <div className="ml-auto text-right">
-          <div className="text-xs text-slate-500">Total ({rows.length} filas)</div>
-          <div className="text-lg font-bold text-slate-800">{fmt(total)}</div>
-        </div>
+        <button onClick={exportMacro} className="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Exportar Excel MACRO</button>
+        <div className="ml-auto text-right"><div className="text-xs text-slate-500">Total MONTO ({rows.length} filas)</div><div className="text-lg font-bold text-slate-800">{fmt(totalMonto)}</div></div>
       </div>
       <div className="bg-white rounded-xl border overflow-x-auto">
         {loading ? <div className="p-6 text-center text-slate-500">Cargando...</div> : (
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+          <table className="text-xs" style={{minWidth: '2400px'}}>
+            <thead className="bg-slate-100 text-slate-600 uppercase">
               <tr>
-                <th className="text-left px-3 py-2">VTO</th>
-                <th className="text-left px-3 py-2">Comprob</th>
-                <th className="text-left px-3 py-2">Razon social</th>
-                <th className="text-left px-3 py-2">Concepto</th>
-                <th className="text-left px-3 py-2">IF/CC</th>
-                <th className="text-left px-3 py-2">Prov</th>
-                <th className="text-right px-3 py-2">Importe</th>
-                <th className="text-left px-3 py-2">Origen</th>
+                {['Control','EMISION','VTO','NUMERO','Cod','PROVEEDOR','COND.','MOVIMIENTO','IF/CC','OC/PE','DETALLE','JURISDICCION','ACCION','MONTO','IDC','IIBB','IIBB L.156','VAC','IVA','IDC 2','IDC 3','Saldo Final'].map((h,i) => <th key={i} className={`px-2 py-1 ${i >= 13 ? 'text-right' : 'text-left'}`}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
+              {rowsWithSaldo.map(r => (
                 <tr key={r.id} className="border-t hover:bg-slate-50">
-                  <td className="px-3 py-1.5 whitespace-nowrap">{r.fecha_vto || '-'}</td>
-                  <td className="px-3 py-1.5 whitespace-nowrap">{r.nro_comprobante || '-'}</td>
-                  <td className="px-3 py-1.5">{r.razon_social}</td>
-                  <td className="px-3 py-1.5 text-xs">{r.concepto}</td>
-                  <td className="px-3 py-1.5 text-xs">{r.if_cc || '-'}</td>
-                  <td className="px-3 py-1.5 text-xs">{r.provincia || '-'}</td>
-                  <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmt(Number(r.importe))}</td>
-                  <td className="px-3 py-1.5 text-xs text-slate-500">{r.origen}</td>
+                  <td className="px-2 py-1">
+                    <select value={r.control || 'NO'} onChange={e => updateCell(r.id, 'control', e.target.value)} className={`border rounded px-1 text-xs font-medium ${r.control === 'SI' ? 'bg-emerald-100 text-emerald-800' : r.control === 'parcial' ? 'bg-amber-100 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
+                      {controlOpts.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </td>
+           <td className="px-2 py-1 whitespace-nowrap">{r.fecha_emision || '-'}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.fecha_vto || '-'}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.nro_comprobante || '-'}</td>
+                  <td className="px-2 py-1 whitespace-nowrap font-mono">{r.codigo_prov || '-'}</td>
+                  <td className="px-2 py-1">{r.razon_social}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.condicion_compra || '-'}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.concepto}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.if_cc || '-'}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.oc_pe || '-'}</td>
+                  <td className="px-2 py-1">{r.detalle || '-'}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.jurisdiccion || '-'}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.accion || '-'}</td>
+                  <td className="px-2 py-1 text-right whitespace-nowrap font-mono">{fmt(Number(r.importe))}</td>
+                  <td className="px-2 py-1 text-right whitespace-nowrap font-mono text-slate-500">{fmt(Number(r.idc))}</td>
+                  <NumCell val={r.iibb} onSave={v => updateNum(r.id, 'iibb', v)} />
+                  <NumCell val={r.iibb_l156} onSave={v => updateNum(r.id, 'iibb_l156', v)} />
+                  <NumCell val={r.vac} onSave={v => updateNum(r.id, 'vac', v)} />
+                  <NumCell val={r.iva_ret} onSave={v => updateNum(r.id, 'iva_ret', v)} />
+                  <NumCell val={r.idc2} onSave={v => updateNum(r.id, 'idc2', v)} />
+                  <NumCell val={r.idc3} onSave={v => updateNum(r.id, 'idc3', v)} />
+                  <td className="px-2 py-1 text-right whitespace-nowrap font-mono font-semibold">{fmt(r.saldo_final)}</td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-slate-500">Sin filas</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={22} className="px-3 py-6 text-center text-slate-500">Sin filas</td></tr>}
             </tbody>
           </table>
         )}
       </div>
     </div>
+  );
+}
+
+function NumCell({ val, onSave }) {
+  const [v, setV] = useState(val || 0);
+  useEffect(() => { setV(val || 0); }, [val]);
+  return (
+    <td className="px-1 py-1 text-right whitespace-nowrap">
+      <input type="number" step="0.01" value={v} onChange={e => setV(e.target.value)} onBlur={() => Number(v) !== Number(val || 0) && onSave(v)} className="w-24 border rounded px-1 text-right font-mono text-xs" />
+    </td>
   );
 }
 
