@@ -114,3 +114,51 @@ export async function adminResetPassword(user_id, password) {
 export async function adminDeleteUser(user_id) {
   return adminCall({ action: 'delete', user_id });
 }
+
+// -------- Tango Import (Cash Flow) --------
+const TANGO_IMPORT_URL = 'https://vuhjqjdpqievjdbacoge.supabase.co/functions/v1/tango-import';
+
+export async function adminTangoImport({ tipo, filename, file_b64 }) {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess?.session?.access_token;
+  const apikey = 'sb_publishable_uON1ciEGIhZrNRdSoHrWjA_oK0YDTxM';
+  const res = await fetch(TANGO_IMPORT_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': apikey,
+      'Authorization': `Bearer ${token || apikey}`,
+    },
+    body: JSON.stringify({ tipo, filename, file_b64 }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `tango-import HTTP ${res.status}`);
+  return j;
+}
+
+export function useCashFlowRows(filters = {}) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    let q = supabase.from('cash_flow_rows').select('*').order('fecha_vto', { ascending: true }).limit(500);
+    if (filters.concepto) q = q.eq('concepto', filters.concepto);
+    if (filters.desde)    q = q.gte('fecha_vto', filters.desde);
+    if (filters.hasta)    q = q.lte('fecha_vto', filters.hasta);
+    const { data } = await q;
+    setRows(data || []);
+    setLoading(false);
+  }, [JSON.stringify(filters)]);
+  useEffect(() => { load(); }, [load]);
+  return { rows, loading, reload: load };
+}
+
+export function useImportBatches() {
+  const [rows, setRows] = useState([]);
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('import_batches').select('*').order('created_at', { ascending: false }).limit(50);
+    setRows(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  return { rows, reload: load };
+}
