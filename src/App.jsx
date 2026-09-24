@@ -642,6 +642,8 @@ function CashFlowTable() {
   const [concepto, setConcepto] = useState('');
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
+  const [soloPend, setSoloPend] = useState(false);
+  const [showNew, setShowNew] = useState(false);
   const filters = useMemo(() => {
     const f = {};
     if (concepto) f.concepto = concepto;
@@ -660,6 +662,7 @@ function CashFlowTable() {
       return { ...r, saldo_final: s };
     });
   }, [rows]);
+  const displayed = useMemo(() => soloPend ? rowsWithSaldo.filter(r => (r.control || 'NO') !== 'SI') : rowsWithSaldo, [rowsWithSaldo, soloPend]);
   const totalMonto = rows.reduce((a, r) => a + Number(r.importe || 0), 0);
   const fmt = (n) => n == null ? '-' : new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 }).format(Number(n) || 0);
   async function updateCell(id, field, value) {
@@ -697,7 +700,9 @@ function CashFlowTable() {
         </div>
         <div><label className="block text-xs text-slate-500">Desde VTO</label><input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="border rounded px-2 py-1 text-sm" /></div>
         <div><label className="block text-xs text-slate-500">Hasta VTO</label><input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="border rounded px-2 py-1 text-sm" /></div>
+        <label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={soloPend} onChange={e => setSoloPend(e.target.checked)} /> Solo Control=NO</label>
         <button onClick={reload} className="px-3 py-1.5 bg-slate-900 text-white rounded text-sm">Actualizar</button>
+        <button onClick={() => setShowNew(true)} className="px-3 py-1.5 bg-indigo-600 text-white rounded text-sm">+ Nueva fila</button>
         <button onClick={exportMacro} className="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Exportar Excel MACRO</button>
         <div className="ml-auto text-right"><div className="text-xs text-slate-500">Total MONTO ({rows.length} filas)</div><div className="text-lg font-bold text-slate-800">{fmt(totalMonto)}</div></div>
       </div>
@@ -710,14 +715,14 @@ function CashFlowTable() {
               </tr>
             </thead>
             <tbody>
-              {rowsWithSaldo.map(r => (
+              {displayed.map(r => (
                 <tr key={r.id} className="border-t hover:bg-slate-50">
                   <td className="px-2 py-1">
                     <select value={r.control || 'NO'} onChange={e => updateCell(r.id, 'control', e.target.value)} className={`border rounded px-1 text-xs font-medium ${r.control === 'SI' ? 'bg-emerald-100 text-emerald-800' : r.control === 'parcial' ? 'bg-amber-100 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
                       {controlOpts.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </td>
-           <td className="px-2 py-1 whitespace-nowrap">{r.fecha_emision || '-'}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{r.fecha_emision || '-'}</td>
                   <td className="px-2 py-1 whitespace-nowrap">{r.fecha_vto || '-'}</td>
                   <td className="px-2 py-1 whitespace-nowrap">{r.nro_comprobante || '-'}</td>
                   <td className="px-2 py-1 whitespace-nowrap font-mono">{r.codigo_prov || '-'}</td>
@@ -744,6 +749,52 @@ function CashFlowTable() {
             </tbody>
           </table>
         )}
+      </div>
+      {showNew && <NewRowForm onClose={() => setShowNew(false)} onSaved={() => { setShowNew(false); reload(); }} />}
+    </div>
+  );
+}
+
+function NewRowForm({ onClose, onSaved }) {
+  const [concepto, setConcepto] = useState('J-Sueldos');
+  const [razon, setRazon] = useState('');
+  const [fechaVto, setFechaVto] = useState('');
+  const [monto, setMonto] = useState('');
+  const [ifcc, setIfcc] = useState('');
+  const [detalle, setDetalle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const conceptos = ['J-Sueldos','K-Cargas Soc','L-Impuestos','M-Ss','N-Fin','P-Otros Egr','Q-Trans e/ Cuentas','F-Cheque','A-Ds por Ventas','B-Trans','C-Cobro Prov','D-Ing Fin','E-Otros Ing','O-Uom','I-Pago a Prov SIN OC'];
+  async function save() {
+    if (!concepto || !monto) { alert('Concepto y monto son obligatorios'); return; }
+    setBusy(true);
+    const n = Number(String(monto).replace(',', '.'));
+    const importe = /^[A-E]-/.test(concepto) ? Math.abs(n) : -Math.abs(n);
+    const idcCalc = Math.round(-importe * 0.006 * 100) / 100;
+    const { error } = await supabase.from('cash_flow_rows').insert({
+      origen: 'manual', concepto, razon_social: razon || '(manual)',
+      fecha_vto: fechaVto || null, importe, idc: idcCalc,
+      if_cc: ifcc || null, detalle: detalle || null, control: 'NO',
+    });
+    setBusy(false);
+    if (error) { alert('Error: ' + error.message); return; }
+    onSaved();
+  }
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl p-6 max-w-lg w-full space-y-3">
+        <div className="flex justify-between items-center"><div className="text-lg font-semibold">Nueva fila del cash flow</div><button onClick={onClose} className="text-slate-500 text-xl">✕</button></div>
+        <div><label className="block text-xs text-slate-500 mb-1">Concepto (MOVIMIENTO)</label><select value={concepto} onChange={e => setConcepto(e.target.value)} className="w-full border rounded px-2 py-1">{conceptos.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+        <div><label className="block text-xs text-slate-500 mb-1">Razon social / Descripcion</label><input value={razon} onChange={e => setRazon(e.target.value)} className="w-full border rounded px-2 py-1" placeholder="Ej: Sueldos septiembre, IVA DDJJ agosto..." /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="block text-xs text-slate-500 mb-1">Fecha VTO</label><input type="date" value={fechaVto} onChange={e => setFechaVto(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">Monto (positivo)</label><input type="number" step="0.01" value={monto} onChange={e => setMonto(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="block text-xs text-slate-500 mb-1">IF / CC (opcional)</label><input value={ifcc} onChange={e => setIfcc(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">Detalle (opcional)</label><input value={detalle} onChange={e => setDetalle(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
+        </div>
+        <div className="text-xs text-slate-500">Conceptos A-E se cargan como ingresos (+). Resto como egresos (-). IDC se calcula automatico.</div>
+        <div className="flex justify-end gap-2"><button onClick={onClose} className="px-3 py-1.5 border rounded">Cancelar</button><button onClick={save} disabled={busy} className="px-3 py-1.5 bg-slate-900 text-white rounded disabled:opacity-50">{busy ? 'Guardando...' : 'Guardar'}</button></div>
       </div>
     </div>
   );
