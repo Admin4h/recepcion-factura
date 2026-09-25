@@ -130,7 +130,7 @@ function AdminPane({ profile, roles }) {
   return (
     <div>
       <div className="flex gap-2 mb-4 flex-wrap">
-        {[['tablero','Tablero'],['facturas','Facturas'],['conceptos','Conceptos'],['usuarios','Usuarios'],['centros','Centros de costo'],['cashflow','Cash Flow']].map(([k, l]) => <button key={k} onClick={() => setSub(k)} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${sub === k ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}`}>{l}</button>)}
+        {[['tablero','Tablero'],['facturas','Facturas'],['conceptos','Conceptos'],['usuarios','Usuarios'],['centros','Centros de costo'],['cashflow','Bancos']].map(([k, l]) => <button key={k} onClick={() => setSub(k)} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${sub === k ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}`}>{l}</button>)}
       </div>
       {sub === 'tablero' && <AdminTablero />}
       {sub === 'facturas' && <AdminFacturas profile={profile} roles={roles} />}
@@ -574,9 +574,8 @@ function AdminCashFlow({ roles = [] }) {
   const { rows: pendientes } = useExcepciones('abierta');
   const tabs = [
     ['subir', 'Subir reportes'],
-    ['flujo', 'Cash Flow'],
+    ['flujo', 'Banco Macro'],
     ['excepciones', 'Bandeja'],
-    ['pedidos', 'Pedidos abiertos'],
     ['batches', 'Historial de subidas'],
   ];
   return (
@@ -594,7 +593,6 @@ function AdminCashFlow({ roles = [] }) {
       {subtab === 'subir'       && <TangoUploader roles={roles} />}
       {subtab === 'flujo'       && <CashFlowTable />}
       {subtab === 'excepciones' && <ExcepcionesPane />}
-      {subtab === 'pedidos'     && <PedidosAbiertosPane />}
       {subtab === 'batches'     && <ImportBatchList />}
     </div>
   );
@@ -755,18 +753,6 @@ function TangoUploader({ roles = [] }) {
         hint: 'Facturas de proveedor pendientes. Entran como G-Pago a Proveedores, con vencimiento.' },
       { tipo: 'pendientes', label: 'Pendientes de facturar',
         hint: 'OCs sin factura del proveedor. Se proyectan como H-Pago Proyectado a 30 o 60 dias segun la condicion de compra.' },
-    ]},
-    { titulo: 'Ventas', zonas: [
-      { tipo: 'cobranzas', label: 'Cobranzas a realizar',
-        hint: 'Facturas emitidas al cliente. Entran como A-Ds por Ventas. Da de alta solo los clientes que falten en el padron.' },
-      { tipo: 'pedidos_ventas', label: 'Pedidos pendientes de facturar',
-        hint: 'Pedidos abiertos. El saldo se reparte en cuotas mensuales como D-Ing Proyectado.' },
-    ]},
-    { titulo: 'Tesoreria y maestros', zonas: [
-      { tipo: 'tesoreria', label: 'Tesoreria - Comprobantes',
-        hint: 'Sueldos, cargas, cheques, transferencias y gastos directos. Cada tipo va a su concepto. Las transferencias y los reversos van a la bandeja.' },
-      { tipo: 'clientes', label: 'Clientes',
-        hint: 'Maestro de clientes de Tango, en paralelo a los proveedores.' },
     ]},
   ];
   return (
