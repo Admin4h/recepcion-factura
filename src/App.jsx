@@ -4,6 +4,7 @@ import { useSession, useProfile } from './lib/auth';
 import { useInvoices, useCostCenters, useProfiles, uploadInvoicePhoto, fileToBase64, runOCR, logEvent, adminCreateUser, adminResetPassword, adminDeleteUser , adminTangoImport, useCashFlowRows, useImportBatches, useClients, usePedidosAbiertos, useExcepciones, resolverExcepcion, actualizarVigenciaPedido } from './lib/db';
 import { Login } from './components/Login';
 import { InvoiceForm, money } from './components/InvoiceForm';
+import BancoMacroSheet from './components/BancoMacroSheet';
 
 function Loading() { return <div className="min-h-screen flex items-center justify-center text-slate-500">Cargando...</div>; }
 
@@ -591,7 +592,7 @@ function AdminCashFlow({ roles = [] }) {
         ))}
       </div>
       {subtab === 'subir'       && <TangoUploader roles={roles} />}
-      {subtab === 'flujo'       && <CashFlowTable />}
+      {subtab === 'flujo'       && <BancoMacroSheet />}
       {subtab === 'excepciones' && <ExcepcionesPane />}
       {subtab === 'batches'     && <ImportBatchList />}
     </div>
