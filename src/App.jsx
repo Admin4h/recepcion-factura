@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 import { useSession, useProfile } from './lib/auth';
-import { useInvoices, useCostCenters, useProfiles, uploadInvoicePhoto, fileToBase64, runOCR, logEvent, adminCreateUser, adminResetPassword, adminDeleteUser , adminTangoImport, useCashFlowRows, useImportBatches } from './lib/db';
+import { useInvoices, useCostCenters, useProfiles, uploadInvoicePhoto, fileToBase64, runOCR, logEvent, adminCreateUser, adminResetPassword, adminDeleteUser , adminTangoImport, useCashFlowRows, useImportBatches, useClients, usePedidosAbiertos, useExcepciones, resolverExcepcion, actualizarVigenciaPedido } from './lib/db';
 import { Login } from './components/Login';
 import { InvoiceForm, money } from './components/InvoiceForm';
 
@@ -137,7 +137,7 @@ function AdminPane({ profile, roles }) {
       {sub === 'conceptos' && <AdminConceptos />}
       {sub === 'usuarios' && <AdminUsuarios />}
       {sub === 'centros' && <AdminCentros />}
-      {sub === 'cashflow' && <AdminCashFlow />}
+      {sub === 'cashflow' && <AdminCashFlow roles={roles} />}
     </div>
   );
 }
@@ -254,7 +254,7 @@ function AdminConceptos() {
 
 function AdminUsuarios() {
   const { rows: users, reload } = useProfiles();
-  const ALL_ROLES = ['cargador', 'comprador', 'administracion'];
+  const ALL_ROLES = ['cargador', 'comprador', 'facturacion', 'cobranzas', 'administracion'];
   const [newNombre, setNewNombre] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPass, setNewPass] = useState('');
@@ -326,7 +326,7 @@ function AdminUsuarios() {
 
       <div className="bg-white rounded-xl border overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50"><tr><th className="text-left px-4 py-2">Nombre</th><th className="text-left px-4 py-2">Email</th><th className="px-2 py-2">Tarjeta</th><th className="px-2 py-2">Cargador</th><th className="px-2 py-2">Comprador</th><th className="px-2 py-2">Admin</th><th className="px-2 py-2">Acciones</th></tr></thead>
+          <thead className="bg-slate-50"><tr><th className="text-left px-4 py-2">Nombre</th><th className="text-left px-4 py-2">Email</th><th className="px-2 py-2">Tarjeta</th>{ALL_ROLES.map(r => <th key={r} className="px-2 py-2 capitalize text-xs">{r === 'administracion' ? 'Admin' : r}</th>)}<th className="px-2 py-2">Acciones</th></tr></thead>
           <tbody>{users.map(u => { const rs = (u.user_roles || []).map(r => r.role); return (
             <tr key={u.id} className="border-t">
               <td className="px-4 py-2">{u.nombre}</td>
@@ -561,44 +561,234 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
 }
 
 // ============ CASH FLOW ============
-function AdminCashFlow() {
+// Impuesto a los debitos y creditos (ley 25.413). Grava tanto debitos como
+// creditos, asi que el costo es siempre positivo sin importar el signo del
+// movimiento. Es editable por fila porque hay conceptos exentos o con
+// alicuota reducida (acreditacion de sueldos, transferencias entre cuentas
+// propias del mismo titular).
+const IDC_TASA = 0.006;
+const calcIDC = (importe) => Math.round(Math.abs(Number(importe) || 0) * IDC_TASA * 100) / 100;
+
+function AdminCashFlow({ roles = [] }) {
   const [subtab, setSubtab] = useState('subir');
+  const { rows: pendientes } = useExcepciones('abierta');
+  const tabs = [
+    ['subir', 'Subir reportes'],
+    ['flujo', 'Cash Flow'],
+    ['excepciones', 'Bandeja'],
+    ['pedidos', 'Pedidos abiertos'],
+    ['batches', 'Historial de subidas'],
+  ];
   return (
     <div className="space-y-4">
       <div className="flex gap-2 flex-wrap">
-        {[['subir','Subir reportes'],['flujo','Cash Flow'],['batches','Historial de subidas']].map(([k,l]) => (
-          <button key={k} onClick={() => setSubtab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${subtab === k ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}`}>{l}</button>
+        {tabs.map(([k, l]) => (
+          <button key={k} onClick={() => setSubtab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 ${subtab === k ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}`}>
+            {l}
+            {k === 'excepciones' && pendientes.length > 0 && (
+              <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold ${subtab === k ? 'bg-white text-slate-900' : 'bg-rose-100 text-rose-700'}`}>{pendientes.length}</span>
+            )}
+          </button>
         ))}
       </div>
-      {subtab === 'subir'   && <TangoUploader />}
-      {subtab === 'flujo'   && <CashFlowTable />}
-      {subtab === 'batches' && <ImportBatchList />}
+      {subtab === 'subir'       && <TangoUploader roles={roles} />}
+      {subtab === 'flujo'       && <CashFlowTable />}
+      {subtab === 'excepciones' && <ExcepcionesPane />}
+      {subtab === 'pedidos'     && <PedidosAbiertosPane />}
+      {subtab === 'batches'     && <ImportBatchList />}
     </div>
   );
 }
 
-function TangoUploader() {
-  const COLS_PAGOS = ['A. Fecha vto','B. Tipo comprobante','C. Nro comprobante','D. Fecha emision','F. Cod. clasif.','G. Desc. clasif.','H. Cod. prov.','I. Razon social','K. Nro doc contacto','W. Provincia','AE. Total pendiente CTE'];
-  const COLS_PENDIENTES = ['C. Nro OC','D. Cod. prov.','E. Razon social','G. Fecha emision','L. Condicion compra','M. Cod. clasif. (IF)','P. Provincia','Q. Pendiente sin impuestos','W. Desc. clasif.','AI. Estado del renglon'];
+// Todo lo que la app no pudo resolver sola cae aca. Nada entra al
+// cash flow por las suyas si hay ambiguedad.
+function ExcepcionesPane() {
+  const [verEstado, setVerEstado] = useState('abierta');
+  const { rows, loading, reload } = useExcepciones(verEstado);
+  const [nota, setNota] = useState({});
+  const [busy, setBusy] = useState(null);
+  const ETIQUETAS = {
+    tra_sin_direccion:    ['Transferencia sin direccion', 'bg-blue-100 text-blue-800'],
+    reverso_sin_origen:   ['Reverso a confirmar',          'bg-amber-100 text-amber-800'],
+    comprobante_nuevo:    ['Tipo sin mapeo',               'bg-violet-100 text-violet-800'],
+    vigencia_sin_confirmar:['Vigencia estimada',           'bg-amber-100 text-amber-800'],
+    pedido_agotado:       ['Pedido agotado',               'bg-rose-100 text-rose-800'],
+    sin_padron:           ['Fuera del padron',             'bg-slate-200 text-slate-700'],
+    match_ambiguo:        ['Match ambiguo',                'bg-rose-100 text-rose-800'],
+    sin_match:            ['Sin match',                    'bg-rose-100 text-rose-800'],
+  };
+  const fmt = (n) => n == null ? '' : new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(Number(n) || 0);
+  async function cerrar(id, estado) {
+    setBusy(id);
+    try { await resolverExcepcion(id, { estado, nota: nota[id] }); reload(); }
+    catch (e) { alert('Error: ' + e.message); }
+    finally { setBusy(null); }
+  }
   return (
-    <div className="space-y-4">
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-slate-700">
-        <div className="font-medium text-slate-900 mb-2">Recordatorio: columnas que tiene que traer cada Excel de Tango</div>
-        <div className="grid md:grid-cols-2 gap-4">
-          <div>
-            <div className="font-medium text-blue-900 mb-1">Pagos a realizar</div>
-            <ul className="list-disc list-inside space-y-0.5">{COLS_PAGOS.map(c => <li key={c}>{c}</li>)}</ul>
+    <div className="space-y-3">
+      <div className="flex gap-2 items-center flex-wrap">
+        {[['abierta','Abiertas'],['resuelta','Resueltas'],['descartada','Descartadas']].map(([k,l]) => (
+          <button key={k} onClick={() => setVerEstado(k)} className={`px-2 py-1 rounded text-xs ${verEstado === k ? 'bg-slate-800 text-white' : 'bg-white border'}`}>{l}</button>
+        ))}
+        <button onClick={reload} className="ml-auto text-sm text-slate-600 hover:text-slate-900">Actualizar</button>
+      </div>
+      {loading && <div className="bg-white rounded-xl border p-6 text-center text-slate-500">Cargando...</div>}
+      {!loading && rows.length === 0 && (
+        <div className="bg-white rounded-xl border p-8 text-center">
+          <div className="text-slate-800 font-medium">No hay nada pendiente</div>
+          <div className="text-sm text-slate-500 mt-1">Cuando un movimiento no cierre contra nada, o una transferencia no diga su direccion, aparece aca.</div>
+        </div>
+      )}
+      {rows.map(x => {
+        const [etq, cls] = ETIQUETAS[x.tipo] || [x.tipo, 'bg-slate-200 text-slate-700'];
+        return (
+          <div key={x.id} className="bg-white rounded-xl border p-4 space-y-3">
+            <div className="flex items-start gap-3 flex-wrap">
+              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>{etq}</span>
+              {x.fecha && <span className="text-xs text-slate-500">{x.fecha}</span>}
+              {x.importe != null && Number(x.importe) !== 0 && <span className="text-sm font-mono font-semibold ml-auto">{fmt(x.importe)}</span>}
+            </div>
+            <div className="text-sm text-slate-800">{x.descripcion}</div>
+            {x.detalle && Object.keys(x.detalle).length > 0 && (
+              <div className="text-xs text-slate-500 font-mono bg-slate-50 rounded p-2 overflow-x-auto">
+                {Object.entries(x.detalle).map(([k, v]) => <div key={k}>{k}: {String(v)}</div>)}
+              </div>
+            )}
+            {x.estado === 'abierta' ? (
+              <div className="flex gap-2 items-center flex-wrap">
+                <input value={nota[x.id] || ''} onChange={e => setNota(n => ({ ...n, [x.id]: e.target.value }))} placeholder="Que se decidio y por que" className="flex-1 min-w-48 border rounded px-2 py-1 text-sm" />
+                <button disabled={busy === x.id} onClick={() => cerrar(x.id, 'resuelta')} className="px-3 py-1.5 bg-slate-900 text-white rounded text-sm disabled:opacity-50">Resuelta</button>
+                <button disabled={busy === x.id} onClick={() => cerrar(x.id, 'descartada')} className="px-3 py-1.5 border rounded text-sm disabled:opacity-50">Descartar</button>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500 border-t pt-2">
+                {x.estado === 'resuelta' ? 'Resuelta' : 'Descartada'}
+                {x.resuelta_at ? ' el ' + new Date(x.resuelta_at).toLocaleDateString('es-AR') : ''}
+                {x.nota ? ' · ' + x.nota : ''}
+              </div>
+            )}
           </div>
-          <div>
-            <div className="font-medium text-blue-900 mb-1">Pendientes de facturar</div>
-            <ul className="list-disc list-inside space-y-0.5">{COLS_PENDIENTES.map(c => <li key={c}>{c}</li>)}</ul>
+        );
+      })}
+    </div>
+  );
+}
+
+// Los pedidos de venta se facturan por partes a lo largo de meses. El
+// reporte de Tango no dice cuantos, asi que la app proyecta con un
+// default y aca se corrige.
+function PedidosAbiertosPane() {
+  const { rows, loading, reload } = usePedidosAbiertos();
+  const [busy, setBusy] = useState(null);
+  const fmt = (n) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(Number(n) || 0);
+  async function guardarVigencia(id, meses) {
+    setBusy(id);
+    try { await actualizarVigenciaPedido(id, meses); reload(); }
+    catch (e) { alert('Error: ' + e.message); }
+    finally { setBusy(null); }
+  }
+  if (loading) return <div className="bg-white rounded-xl border p-6 text-center text-slate-500">Cargando...</div>;
+  if (rows.length === 0) return (
+    <div className="bg-white rounded-xl border p-8 text-center">
+      <div className="text-slate-800 font-medium">No hay pedidos abiertos</div>
+      <div className="text-sm text-slate-500 mt-1">Suba el reporte de pedidos pendientes de facturar para verlos aca.</div>
+    </div>
+  );
+  return (
+    <div className="space-y-2">
+      <div className="text-sm text-slate-600 bg-amber-50 border border-amber-200 rounded-lg p-3">
+        Al cambiar los meses de vigencia hay que volver a subir el reporte de pedidos para que se regeneren las cuotas proyectadas del cash flow.
+      </div>
+      <div className="bg-white rounded-xl border overflow-x-auto">
+        <table className="w-full text-sm" style={{ minWidth: '900px' }}>
+          <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
+            <tr>
+              <th className="px-3 py-2 text-left">Pedido</th>
+              <th className="px-3 py-2 text-left">Cliente</th>
+              <th className="px-3 py-2 text-left">Vendedor</th>
+              <th className="px-3 py-2 text-right">Total</th>
+              <th className="px-3 py-2 text-right">Facturado</th>
+              <th className="px-3 py-2 text-right">Saldo</th>
+              <th className="px-3 py-2 text-center">Meses</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(p => {
+              const saldo = Number(p.total_original || 0) - Number(p.facturado_acum || 0);
+              const pct = Number(p.total_original) > 0 ? Math.round(Number(p.facturado_acum) / Number(p.total_original) * 100) : 0;
+              return (
+                <tr key={p.id} className="border-t">
+                  <td className="px-3 py-2 font-mono text-xs">{p.nro_pedido}</td>
+                  <td className="px-3 py-2">{p.razon_social}</td>
+                  <td className="px-3 py-2 text-slate-500 text-xs">{p.vendedor || '-'}</td>
+                  <td className="px-3 py-2 text-right font-mono">{fmt(p.total_original)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-500">{fmt(p.facturado_acum)} <span className="text-xs">({pct}%)</span></td>
+                  <td className="px-3 py-2 text-right font-mono font-semibold">{fmt(saldo)}</td>
+                  <td className="px-3 py-2 text-center">
+                    <input type="number" min="1" max="60" defaultValue={p.meses_vigencia}
+                      onBlur={e => Number(e.target.value) !== Number(p.meses_vigencia) && guardarVigencia(p.id, e.target.value)}
+                      disabled={busy === p.id}
+                      className={`w-16 border rounded px-1 py-0.5 text-center text-sm ${p.vigencia_confirmada ? '' : 'bg-amber-50 border-amber-300'}`} />
+                    {!p.vigencia_confirmada && <div className="text-xs text-amber-700 mt-0.5">estimado</div>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function TangoUploader({ roles = [] }) {
+  const isAdmin = roles.includes('administracion');
+  const puede = (t) => {
+    if (isAdmin) return true;
+    if (t === 'cobranzas') return roles.includes('cobranzas');
+    if (t === 'pedidos_ventas') return roles.includes('facturacion');
+    return false;
+  };
+  const grupos = [
+    { titulo: 'Compras', zonas: [
+      { tipo: 'pagos', label: 'Pagos a realizar',
+        hint: 'Facturas de proveedor pendientes. Entran como G-Pago a Proveedores, con vencimiento.' },
+      { tipo: 'pendientes', label: 'Pendientes de facturar',
+        hint: 'OCs sin factura del proveedor. Se proyectan como H-Pago Proyectado a 30 o 60 dias segun la condicion de compra.' },
+    ]},
+    { titulo: 'Ventas', zonas: [
+      { tipo: 'cobranzas', label: 'Cobranzas a realizar',
+        hint: 'Facturas emitidas al cliente. Entran como A-Ds por Ventas. Da de alta solo los clientes que falten en el padron.' },
+      { tipo: 'pedidos_ventas', label: 'Pedidos pendientes de facturar',
+        hint: 'Pedidos abiertos. El saldo se reparte en cuotas mensuales como D-Ing Proyectado.' },
+    ]},
+    { titulo: 'Tesoreria y maestros', zonas: [
+      { tipo: 'tesoreria', label: 'Tesoreria - Comprobantes',
+        hint: 'Sueldos, cargas, cheques, transferencias y gastos directos. Cada tipo va a su concepto. Las transferencias y los reversos van a la bandeja.' },
+      { tipo: 'clientes', label: 'Clientes',
+        hint: 'Maestro de clientes de Tango, en paralelo a los proveedores.' },
+    ]},
+  ];
+  return (
+    <div className="space-y-5">
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-slate-700">
+        <div className="font-medium text-slate-900 mb-1">Como funciona</div>
+        Cada reporte se baja de Tango y se sube aca tal cual, sin tocarlo. La app detecta el encabezado sola, resuelve proveedores y clientes contra el padron, y arma las filas del cash flow. Subir dos veces el mismo archivo no duplica nada: las filas repetidas se omiten.
+      </div>
+      {grupos.map(g => (
+        <div key={g.titulo}>
+          <div className="text-xs uppercase tracking-wide text-slate-500 font-semibold mb-2">{g.titulo}</div>
+          <div className="grid md:grid-cols-2 gap-4">
+            {g.zonas.map(z => puede(z.tipo)
+              ? <TangoDropZone key={z.tipo} tipo={z.tipo} label={z.label} hint={z.hint} />
+              : <div key={z.tipo} className="bg-slate-50 rounded-xl border border-dashed p-4 text-sm text-slate-400">
+                  <div className="font-medium text-slate-500">{z.label}</div>
+                  <div className="text-xs mt-1">Su rol no puede subir este reporte.</div>
+                </div>
+            )}
           </div>
         </div>
-      </div>
-      <div className="grid md:grid-cols-2 gap-4">
-        <TangoDropZone tipo="pagos"       label="Pagos a realizar"        hint="Se cargan como G-Pago a Proveedores." />
-        <TangoDropZone tipo="pendientes"  label="Pendientes de facturar"  hint="Se proyectan como H-Pago a Prov Proyectados a 30/60 dias segun condicion de compra." />
-      </div>
+      ))}
     </div>
   );
 }
@@ -607,17 +797,22 @@ function TangoDropZone({ tipo, label, hint }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [err, setErr] = useState(null);
+  const [notas, setNotas] = useState([]);
   async function onFile(e) {
     const f = e.target.files?.[0];
     e.target.value = '';
     if (!f) return;
-    setBusy(true); setMsg(null); setErr(null);
+    setBusy(true); setMsg(null); setErr(null); setNotas([]);
     try {
       const b64 = await fileToBase64(f);
       const b64clean = String(b64).split(',').pop();
       const r = await adminTangoImport({ tipo, filename: f.name, file_b64: b64clean });
-      const w = (r.warnings || []).length;
-      setMsg(`OK · ${r.rows_created} filas cargadas · ${r.rows_skipped} descartadas${w ? ` · ${w} advertencias` : ''}`);
+      const partes = [`${r.rows_created} filas cargadas`];
+      if (r.rows_skipped)  partes.push(`${r.rows_skipped} descartadas`);
+      if (r.duplicados)    partes.push(`${r.duplicados} ya estaban`);
+      if (r.excepciones)   partes.push(`${r.excepciones} a revisar en la bandeja`);
+      setMsg('OK · ' + partes.join(' · '));
+      setNotas(r.warnings || []);
     } catch (ex) {
       setErr(ex.message || String(ex));
     } finally {
@@ -633,6 +828,7 @@ function TangoDropZone({ tipo, label, hint }) {
         {busy ? 'Procesando...' : 'Arrastre el archivo o toque para elegir'}
       </label>
       {msg && <div className="text-sm p-2 rounded bg-emerald-50 text-emerald-800">{msg}</div>}
+      {notas.length > 0 && <ul className="text-xs text-slate-600 bg-slate-50 rounded p-2 space-y-0.5 list-disc list-inside">{notas.map((n, i) => <li key={i}>{n}</li>)}</ul>}
       {err && <div className="text-sm p-2 rounded bg-rose-50 text-rose-800">Error: {err}</div>}
     </div>
   );
@@ -651,19 +847,44 @@ function CashFlowTable() {
     if (hasta) f.hasta = hasta;
     return f;
   }, [concepto, desde, hasta]);
-  const { rows, loading, reload } = useCashFlowRows(filters);
-  const conceptos = ['G-Pago a Proveedores','H-Pago a Prov Proyectados','I-Pago a Prov SIN OC','A-Ds por Ventas','D-Ing Fin','L-Impuestos','P-Otros Egr','Q-Trans e/ Cuentas'];
+  const { rows, loading, legacy, reload } = useCashFlowRows(filters);
+  const conceptos = ['G-Pago a Proveedores','H-Pago a Prov Proyectados','I-Pago a Prov SIN OC','A-Ds por Ventas','D-Ing Proyectado','B-Trans','C-Cobro Prov','D-Ing Fin','J-Sueldos','K-Cargas Soc','L-Impuestos','F-Cheque','P-Otros Egr','Q-Trans e/ Cuentas'];
   const controlOpts = ['SI','NO','parcial'];
+  // proyeccion  estimada a mano, sin comprobante
+  // compromiso  hay factura u OC, todavia no hay orden de pago
+  // comprobante hay O/P o REC con fecha valor, el banco no lo movio
+  // conciliado  matcheo contra el extracto
+  const ESTADOS = {
+    proyeccion:  ['Proyeccion',  'bg-slate-100 text-slate-600'],
+    compromiso:  ['Compromiso',  'bg-blue-100 text-blue-800'],
+    comprobante: ['Comprobante', 'bg-amber-100 text-amber-800'],
+    conciliado:  ['Conciliado',  'bg-emerald-100 text-emerald-800'],
+  };
+  const hoy = new Date().toISOString().slice(0, 10);
   const rowsWithSaldo = useMemo(() => {
     let s = 0;
     return rows.map(r => {
       const m = Number(r.importe||0), i = Number(r.idc||0), b = Number(r.iibb||0), b2 = Number(r.iibb_l156||0), va = Number(r.vac||0), iv = Number(r.iva_ret||0), i2 = Number(r.idc2||0), i3 = Number(r.idc3||0);
-      s = s + m - i - b - b2 - va - iv - i2 - i3;
-      return { ...r, saldo_final: s };
+      const retenciones = i + b + b2 + va + iv + i2 + i3;
+      s = s + m - retenciones;
+      const vencida = !!r.fecha_vto && r.fecha_vto < hoy && (r.control || 'NO') !== 'SI';
+      return { ...r, retenciones, saldo_final: s, vencida };
     });
-  }, [rows]);
+  }, [rows, hoy]);
   const displayed = useMemo(() => soloPend ? rowsWithSaldo.filter(r => (r.control || 'NO') !== 'SI') : rowsWithSaldo, [rowsWithSaldo, soloPend]);
-  const totalMonto = rows.reduce((a, r) => a + Number(r.importe || 0), 0);
+  // Los totales se calculan sobre lo que esta a la vista: si filtra, los
+  // numeros del encabezado acompanian el filtro.
+  const tot = useMemo(() => {
+    let ingresos = 0, egresos = 0, retenciones = 0, vencidas = 0;
+    for (const r of displayed) {
+      const m = Number(r.importe || 0);
+      if (m >= 0) ingresos += m; else egresos += m;
+      retenciones += Number(r.retenciones || 0);
+      if (r.vencida) vencidas++;
+    }
+    return { ingresos, egresos, retenciones, neto: ingresos + egresos - retenciones, vencidas };
+  }, [displayed]);
+  const saldoFinal = rowsWithSaldo.length ? rowsWithSaldo[rowsWithSaldo.length - 1].saldo_final : 0;
   const fmt = (n) => n == null ? '-' : new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 }).format(Number(n) || 0);
   async function updateCell(id, field, value) {
     await supabase.from('cash_flow_rows').update({ [field]: value }).eq('id', id);
@@ -704,26 +925,48 @@ function CashFlowTable() {
         <button onClick={reload} className="px-3 py-1.5 bg-slate-900 text-white rounded text-sm">Actualizar</button>
         <button onClick={() => setShowNew(true)} className="px-3 py-1.5 bg-indigo-600 text-white rounded text-sm">+ Nueva fila</button>
         <button onClick={exportMacro} className="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Exportar Excel MACRO</button>
-        <div className="ml-auto text-right"><div className="text-xs text-slate-500">Total MONTO ({rows.length} filas)</div><div className="text-lg font-bold text-slate-800">{fmt(totalMonto)}</div></div>
       </div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-px bg-slate-200 rounded-xl overflow-hidden border">
+        <div className="bg-white p-3"><div className="text-xs text-slate-500">Ingresos</div><div className="text-base font-bold text-emerald-700 font-mono">{fmt(tot.ingresos)}</div></div>
+        <div className="bg-white p-3"><div className="text-xs text-slate-500">Egresos</div><div className="text-base font-bold text-rose-700 font-mono">{fmt(tot.egresos)}</div></div>
+        <div className="bg-white p-3"><div className="text-xs text-slate-500">Retenciones banco</div><div className="text-base font-bold text-slate-600 font-mono">{fmt(-tot.retenciones)}</div></div>
+        <div className="bg-white p-3"><div className="text-xs text-slate-500">Neto del filtro ({displayed.length} filas)</div><div className={`text-base font-bold font-mono ${tot.neto >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmt(tot.neto)}</div></div>
+        <div className="bg-white p-3"><div className="text-xs text-slate-500">Saldo final acumulado</div><div className="text-base font-bold text-slate-900 font-mono">{fmt(saldoFinal)}</div></div>
+      </div>
+      {legacy && (
+        <div className="px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg text-sm text-amber-900">
+          Falta correr la migracion <span className="font-mono text-xs">05_ventas_schema.sql</span> en Supabase. Mientras tanto la tabla no muestra estado ni fecha valor, y ordena por vencimiento.
+        </div>
+      )}
+      {tot.vencidas > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-rose-50 border border-rose-200 rounded-lg text-sm text-rose-900">
+          <span className="font-semibold">{tot.vencidas}</span>
+          <span>{tot.vencidas === 1 ? 'fila vencida sin conciliar' : 'filas vencidas sin conciliar'} (VTO anterior a hoy y Control distinto de SI).</span>
+          {!soloPend && <button onClick={() => setSoloPend(true)} className="ml-auto underline font-medium">Ver solo pendientes</button>}
+        </div>
+      )}
       <div className="bg-white rounded-xl border overflow-x-auto">
         {loading ? <div className="p-6 text-center text-slate-500">Cargando...</div> : (
           <table className="text-xs" style={{minWidth: '2400px'}}>
             <thead className="bg-slate-100 text-slate-600 uppercase">
               <tr>
-                {['Control','EMISION','VTO','NUMERO','Cod','PROVEEDOR','COND.','MOVIMIENTO','IF/CC','OC/PE','DETALLE','JURISDICCION','ACCION','MONTO','IDC','IIBB','IIBB L.156','VAC','IVA','IDC 2','IDC 3','Saldo Final'].map((h,i) => <th key={i} className={`px-2 py-1 ${i >= 13 ? 'text-right' : 'text-left'}`}>{h}</th>)}
+                {['Control','ESTADO','EMISION','VTO','F. VALOR','NUMERO','Cod','PROVEEDOR','COND.','MOVIMIENTO','IF/CC','OC/PE','DETALLE','JURISDICCION','ACCION','MONTO','IDC','IIBB','IIBB L.156','VAC','IVA','IDC 2','IDC 3','Saldo Final'].map((h,i) => <th key={i} className={`px-2 py-1 ${i >= 15 ? 'text-right' : 'text-left'}`}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
               {displayed.map(r => (
-                <tr key={r.id} className="border-t hover:bg-slate-50">
+                <tr key={r.id} className={`border-t hover:bg-slate-50 ${r.vencida ? 'bg-rose-50/60' : ''}`}>
                   <td className="px-2 py-1">
                     <select value={r.control || 'NO'} onChange={e => updateCell(r.id, 'control', e.target.value)} className={`border rounded px-1 text-xs font-medium ${r.control === 'SI' ? 'bg-emerald-100 text-emerald-800' : r.control === 'parcial' ? 'bg-amber-100 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
                       {controlOpts.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </td>
+                  <td className="px-2 py-1 whitespace-nowrap">
+                    {(() => { const [t, cls] = ESTADOS[r.estado] || ['-', 'bg-slate-100 text-slate-500']; return <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cls}`}>{t}</span>; })()}
+                  </td>
                   <td className="px-2 py-1 whitespace-nowrap">{r.fecha_emision || '-'}</td>
                   <td className="px-2 py-1 whitespace-nowrap">{r.fecha_vto || '-'}</td>
+                  <td className={`px-2 py-1 whitespace-nowrap ${r.vencida ? 'text-rose-700 font-semibold' : ''}`}>{r.fecha_valor || r.fecha_vto || '-'}</td>
                   <td className="px-2 py-1 whitespace-nowrap">{r.nro_comprobante || '-'}</td>
                   <td className="px-2 py-1 whitespace-nowrap font-mono">{r.codigo_prov || '-'}</td>
                   <td className="px-2 py-1">{r.razon_social}</td>
@@ -735,7 +978,7 @@ function CashFlowTable() {
                   <td className="px-2 py-1 whitespace-nowrap">{r.jurisdiccion || '-'}</td>
                   <td className="px-2 py-1 whitespace-nowrap">{r.accion || '-'}</td>
                   <td className="px-2 py-1 text-right whitespace-nowrap font-mono">{fmt(Number(r.importe))}</td>
-                  <td className="px-2 py-1 text-right whitespace-nowrap font-mono text-slate-500">{fmt(Number(r.idc))}</td>
+                  <NumCell val={r.idc} onSave={v => updateNum(r.id, 'idc', v)} />
                   <NumCell val={r.iibb} onSave={v => updateNum(r.id, 'iibb', v)} />
                   <NumCell val={r.iibb_l156} onSave={v => updateNum(r.id, 'iibb_l156', v)} />
                   <NumCell val={r.vac} onSave={v => updateNum(r.id, 'vac', v)} />
@@ -745,8 +988,18 @@ function CashFlowTable() {
                   <td className="px-2 py-1 text-right whitespace-nowrap font-mono font-semibold">{fmt(r.saldo_final)}</td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={22} className="px-3 py-6 text-center text-slate-500">Sin filas</td></tr>}
+              {displayed.length === 0 && <tr><td colSpan={24} className="px-3 py-6 text-center text-slate-500">{rows.length === 0 ? 'Sin filas' : 'Todas las filas del filtro estan conciliadas.'}</td></tr>}
             </tbody>
+            {displayed.length > 0 && (
+              <tfoot className="bg-slate-100 font-semibold border-t-2 border-slate-300">
+                <tr>
+                  <td className="px-2 py-2" colSpan={15}>Totales de lo que esta a la vista</td>
+                  <td className="px-2 py-2 text-right font-mono">{fmt(tot.ingresos + tot.egresos)}</td>
+                  <td className="px-2 py-2 text-right font-mono text-slate-600" colSpan={7}>Retenciones {fmt(-tot.retenciones)}</td>
+                  <td className="px-2 py-2 text-right font-mono">{fmt(saldoFinal)}</td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         )}
       </div>
@@ -764,15 +1017,20 @@ function NewRowForm({ onClose, onSaved }) {
   const [detalle, setDetalle] = useState('');
   const [busy, setBusy] = useState(false);
   const conceptos = ['J-Sueldos','K-Cargas Soc','L-Impuestos','M-Ss','N-Fin','P-Otros Egr','Q-Trans e/ Cuentas','F-Cheque','A-Ds por Ventas','B-Trans','C-Cobro Prov','D-Ing Fin','E-Otros Ing','O-Uom','I-Pago a Prov SIN OC'];
+  // Conceptos A a E son ingresos; el resto son egresos.
+  const esIngreso = /^[A-E]-/.test(concepto);
+  const n = Number(String(monto).replace(',', '.'));
+  const montoValido = monto !== '' && !isNaN(n) && n !== 0;
+  const importePreview = montoValido ? (esIngreso ? Math.abs(n) : -Math.abs(n)) : 0;
+  const idcPreview = calcIDC(importePreview);
   async function save() {
-    if (!concepto || !monto) { alert('Concepto y monto son obligatorios'); return; }
+    if (!montoValido) { alert('Cargue un monto valido distinto de cero.'); return; }
+    // Sin fecha de vencimiento la fila no ordena y rompe el saldo acumulado.
+    if (!fechaVto) { alert('La fecha de vencimiento es obligatoria: es la que ordena el cash flow.'); return; }
     setBusy(true);
-    const n = Number(String(monto).replace(',', '.'));
-    const importe = /^[A-E]-/.test(concepto) ? Math.abs(n) : -Math.abs(n);
-    const idcCalc = Math.round(-importe * 0.006 * 100) / 100;
     const { error } = await supabase.from('cash_flow_rows').insert({
       origen: 'manual', concepto, razon_social: razon || '(manual)',
-      fecha_vto: fechaVto || null, importe, idc: idcCalc,
+      fecha_vto: fechaVto, importe: importePreview, idc: idcPreview,
       if_cc: ifcc || null, detalle: detalle || null, control: 'NO',
     });
     setBusy(false);
@@ -786,14 +1044,23 @@ function NewRowForm({ onClose, onSaved }) {
         <div><label className="block text-xs text-slate-500 mb-1">Concepto (MOVIMIENTO)</label><select value={concepto} onChange={e => setConcepto(e.target.value)} className="w-full border rounded px-2 py-1">{conceptos.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
         <div><label className="block text-xs text-slate-500 mb-1">Razon social / Descripcion</label><input value={razon} onChange={e => setRazon(e.target.value)} className="w-full border rounded px-2 py-1" placeholder="Ej: Sueldos septiembre, IVA DDJJ agosto..." /></div>
         <div className="grid grid-cols-2 gap-3">
-          <div><label className="block text-xs text-slate-500 mb-1">Fecha VTO</label><input type="date" value={fechaVto} onChange={e => setFechaVto(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
-          <div><label className="block text-xs text-slate-500 mb-1">Monto (positivo)</label><input type="number" step="0.01" value={monto} onChange={e => setMonto(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">Fecha VTO <span className="text-rose-500">*</span></label><input type="date" required value={fechaVto} onChange={e => setFechaVto(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
+          <div><label className="block text-xs text-slate-500 mb-1">Monto en positivo <span className="text-rose-500">*</span></label><input type="number" step="0.01" min="0" value={monto} onChange={e => setMonto(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="block text-xs text-slate-500 mb-1">IF / CC (opcional)</label><input value={ifcc} onChange={e => setIfcc(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
           <div><label className="block text-xs text-slate-500 mb-1">Detalle (opcional)</label><input value={detalle} onChange={e => setDetalle(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
         </div>
-        <div className="text-xs text-slate-500">Conceptos A-E se cargan como ingresos (+). Resto como egresos (-). IDC se calcula automatico.</div>
+        <div className={`rounded-lg p-3 text-sm border ${montoValido ? (esIngreso ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200') : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
+          {montoValido ? (
+            <div className="flex justify-between items-center gap-3">
+              <span className="font-medium">{esIngreso ? 'Entra al banco' : 'Sale del banco'}</span>
+              <span className="font-mono font-semibold">{new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(importePreview)}</span>
+              <span className="text-xs">IDC {IDC_TASA * 100}%: <span className="font-mono">{new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(idcPreview)}</span></span>
+            </div>
+          ) : 'Cargue un monto para ver como queda la fila.'}
+        </div>
+        <div className="text-xs text-slate-500">Conceptos A a E se guardan como ingresos, el resto como egresos. El IDC se precarga al {IDC_TASA * 100}% y despues se puede editar en la tabla: hay movimientos exentos, como la acreditacion de sueldos o las transferencias entre cuentas propias.</div>
         <div className="flex justify-end gap-2"><button onClick={onClose} className="px-3 py-1.5 border rounded">Cancelar</button><button onClick={save} disabled={busy} className="px-3 py-1.5 bg-slate-900 text-white rounded disabled:opacity-50">{busy ? 'Guardando...' : 'Guardar'}</button></div>
       </div>
     </div>
