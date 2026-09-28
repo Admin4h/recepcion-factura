@@ -229,6 +229,21 @@ function AdminConceptos() {
   async function mapear(group, fieldKey) {
     if (!fieldKey) return;
     await supabase.from('learned_concepts').upsert({ concepto_texto: group.texto, action: 'map', field_key: fieldKey }, { onConflict: 'concepto_texto' });
+    // Aplicar el mapeo a las facturas de las que salieron estos items:
+    // sumar el monto al campo destino en cada invoice afectada.
+    const porInvoice = {};
+    for (const it of group.items) {
+      if (!it.invoice_id) continue;
+      porInvoice[it.invoice_id] = (porInvoice[it.invoice_id] || 0) + (Number(it.monto) || 0);
+    }
+    const invoiceIds = Object.keys(porInvoice);
+    if (invoiceIds.length) {
+      const { data: invs } = await supabase.from('invoices').select(`id, ${fieldKey}`).in('id', invoiceIds);
+      for (const inv of invs || []) {
+        const nuevo = (Number(inv[fieldKey]) || 0) + porInvoice[inv.id];
+        await supabase.from('invoices').update({ [fieldKey]: nuevo }).eq('id', inv.id);
+      }
+    }
     await supabase.from('learning_inbox').update({ status: 'mapped', mapped_to_field: fieldKey }).in('id', group.items.map(i => i.id));
     reload();
   }
