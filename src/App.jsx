@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import { useSession, useProfile } from './lib/auth';
 import { useInvoices, useCostCenters, useProfiles, uploadInvoicePhoto, fileToBase64, runOCR, logEvent, adminCreateUser, adminResetPassword, adminDeleteUser , adminTangoImport, useCashFlowRows, useImportBatches, useClients, usePedidosAbiertos, useExcepciones, resolverExcepcion, actualizarVigenciaPedido } from './lib/db';
@@ -411,6 +411,59 @@ function StateBadge({ state }) {
 
 const TARJETAS = ['Visa Macro', 'Visa Santander', 'Visa Galicia', 'Amex'];
 
+function PhotoPicker({ file, onChange }) {
+  const camRef = useRef(null);
+  const fileRef = useRef(null);
+  const [preview, setPreview] = useState(null);
+  useEffect(() => {
+    if (!file) { setPreview(null); return; }
+    if (!file.type || !file.type.startsWith('image/')) { setPreview(null); return; }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const pick = e => { const f = e.target.files && e.target.files[0]; if (f) onChange(f); e.target.value = ''; };
+
+  if (file) {
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+    return (
+      <div className="rounded-lg border bg-slate-50 p-3">
+        <div className="flex items-center gap-3">
+          {preview
+            ? <img src={preview} alt="preview" className="w-16 h-16 object-cover rounded border" />
+            : <div className="w-16 h-16 rounded border bg-white flex items-center justify-center text-2xl">{isPdf ? '📄' : '📎'}</div>}
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium truncate">{file.name || 'archivo'}</div>
+            <div className="text-xs text-slate-500">{(file.size / 1024).toFixed(0)} KB</div>
+          </div>
+          <button type="button" onClick={() => onChange(null)} className="px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 rounded">Quitar</button>
+        </div>
+        <div className="flex gap-2 mt-3">
+          <button type="button" onClick={() => camRef.current?.click()} className="flex-1 px-3 py-2 bg-white border rounded text-sm hover:bg-slate-100">📷 Sacar otra</button>
+          <button type="button" onClick={() => fileRef.current?.click()} className="flex-1 px-3 py-2 bg-white border rounded text-sm hover:bg-slate-100">🖼️ Cambiar archivo</button>
+        </div>
+        <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={pick} className="hidden" />
+        <input ref={fileRef} type="file" accept="image/*,application/pdf" onChange={pick} className="hidden" />
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <button type="button" onClick={() => camRef.current?.click()} className="flex flex-col items-center justify-center gap-1 px-3 py-4 bg-slate-900 text-white rounded-lg hover:bg-slate-800 text-sm font-medium">
+        <span className="text-2xl leading-none">📷</span>
+        <span>Sacar foto</span>
+      </button>
+      <button type="button" onClick={() => fileRef.current?.click()} className="flex flex-col items-center justify-center gap-1 px-3 py-4 bg-white border-2 border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 text-sm font-medium">
+        <span className="text-2xl leading-none">🖼️</span>
+        <span>Elegir archivo</span>
+      </button>
+      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={pick} className="hidden" />
+      <input ref={fileRef} type="file" accept="image/*,application/pdf" onChange={pick} className="hidden" />
+    </div>
+  );
+}
+
 function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
   const isAdmin = (roles || []).includes('administracion');
   const cargadores = (allProfiles || []).filter(p => (p.user_roles || []).some(r => r.role === 'cargador'));
@@ -528,7 +581,7 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
         <button type="button" onClick={() => setTipoCarga('factura')} className={`px-3 py-1.5 rounded text-sm ${tipoCarga === 'factura' ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>Con factura A/C</button>
         <button type="button" onClick={() => setTipoCarga('gasto_sin_factura')} className={`px-3 py-1.5 rounded text-sm ${tipoCarga === 'gasto_sin_factura' ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>Sin factura</button>
       </div>
-      <div><label className="block text-sm font-medium mb-1">Foto {tipoCarga === 'gasto_sin_factura' && '(opcional)'}</label><input type="file" accept="image/*,application/pdf" onChange={e => setFile(e.target.files[0])} className="block w-full text-sm" /></div>
+      <div><label className="block text-sm font-medium mb-1">Foto {tipoCarga === 'gasto_sin_factura' && '(opcional)'}</label><PhotoPicker file={file} onChange={setFile} /></div>
       {tipoCarga === 'gasto_sin_factura' && <>
         <div><label className="block text-sm font-medium mb-1">Concepto</label><input required value={concepto} onChange={e => setConcepto(e.target.value)} className="w-full border rounded px-2 py-1" placeholder="Ej: Suscripcion Adobe" /></div>
         <div><label className="block text-sm font-medium mb-1">Monto</label><input type="number" step="0.01" value={total} onChange={e => setTotal(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
