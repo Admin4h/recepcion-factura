@@ -205,6 +205,17 @@ function PhotoViewer({ url }) {
     drag.current = null;
   }
   if (!url) return <div className="h-full bg-slate-100 rounded-lg flex items-center justify-center text-slate-400">Sin foto</div>;
+  const isPdf = /\.pdf($|\?)/i.test(url);
+  if (isPdf) {
+    return (
+      <div className="relative h-full bg-slate-100 rounded-lg border overflow-hidden">
+        <iframe src={url} title="factura" className="absolute inset-0 w-full h-full" />
+        <div className="absolute bottom-2 right-2 flex gap-1 bg-white/90 rounded-lg shadow p-1">
+          <a href={url} target="_blank" rel="noreferrer" className="px-2 h-8 flex items-center rounded hover:bg-slate-100 text-xs" title="Abrir original">Abrir</a>
+        </div>
+      </div>
+    );
+  }
   return (
     <div ref={boxRef} className="relative h-full bg-slate-100 rounded-lg border overflow-hidden select-none" style={{ touchAction: 'none', cursor: zoom > 1 ? 'grab' : 'default' }}
       onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onDoubleClick={() => (zoom > 1 ? reset() : zoomBy(2))}>
