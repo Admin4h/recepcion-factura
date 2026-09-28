@@ -480,6 +480,9 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
   const isAdmin = (roles || []).includes('administracion');
   const cargadores = (allProfiles || []).filter(p => (p.user_roles || []).some(r => r.role === 'cargador'));
   const [file, setFile] = useState(null);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkFiles, setBulkFiles] = useState([]);
+  const [bulkProgress, setBulkProgress] = useState({}); // { name: {state, error} }
   const [ccId, setCcId] = useState('');
   const [formaPago, setFormaPago] = useState('efectivo');
   const [tipoCarga, setTipoCarga] = useState('factura');
@@ -493,7 +496,6 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
   const [tarjeta, setTarjeta] = useState(profile.tarjeta || '');
   const [titularId, setTitularId] = useState(profile.id);
   const [actAsId, setActAsId] = useState(profile.id);
-  // Auto-set tarjeta cuando cambia el usuario "en nombre de" (admin)
   useEffect(() => {
     if (!isAdmin) return;
     const acting = (allProfiles || []).find(p => p.id === actAsId);
@@ -502,98 +504,172 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
   }, [actAsId, isAdmin]);
   const enNombreDe = isAdmin && actAsId !== profile.id;
 
-  async function submit(e) {
-    e.preventDefault();
-    if (!file && tipoCarga === 'factura') { alert('Sube una foto de la factura'); return; }
-    if (!ccId) { alert('Elegi centro de costo'); return; }
-    if (conOc && !ocNumero.trim()) { alert('Cargar el numero de OC'); return; }
-    setBusy(true);
+  // Procesa UN archivo: sube foto, corre OCR, aplica learned_concepts, inserta invoice,
+  // registra evento, guarda learning_inbox restantes. Devuelve {ok, invoice_id?, error?}.
+  async function processInvoiceFile(f, shared, setStatusFn) {
     try {
-      let photo_path = null;
+      setStatusFn && setStatusFn('Subiendo foto...');
+      const photo_path = await uploadInvoicePhoto(f, profile.id);
       let ocrFields = {};
       let conceptosNoClasif = [];
-      if (file) {
-        setStatus('Subiendo foto...');
-        photo_path = await uploadInvoicePhoto(file, profile.id);
-        if (tipoCarga === 'factura') {
-          setStatus('Leyendo con OCR...');
-          const b64 = await fileToBase64(file);
-          try {
-            const d = await runOCR(b64, file.type || 'image/jpeg');
-            ocrFields = {
-              tipo_comprobante: d.tipoComprobante || null, nro_comprobante: d.nroComprobante || null,
-              razon_social: d.razonSocial || null, cuit: d.cuit || null, fecha_emision: d.fechaEmision || null,
-              moneda: d.moneda || 'ARS', tipo_cambio: d.tipoCambio || null,
-              subtotal_gravado: d.subtotalGravado || null, no_gravado: d.noGravado || null,
-              iva: d.iva || null, percepcion_iva: d.percepcionIva || null,
-              iibb_bsas: d.iibbBsAs || null, iibb_caba: d.iibbCaba || null,
-              total: d.total || null, cae: d.cae || null, cai: d.cai || null,
-            };
-            conceptosNoClasif = Array.isArray(d.conceptosNoClasificados) ? d.conceptosNoClasificados : [];
-            // Aplicar reglas aprendidas (match por texto normalizado)
-            if (conceptosNoClasif.length) {
-              const textosNorm = conceptosNoClasif.map(c => normConcepto(c.texto)).filter(Boolean);
-              const { data: learned } = await supabase.from('learned_concepts').select('*').in('concepto_texto', textosNorm);
-              const remaining = [];
-              for (const c of conceptosNoClasif) {
-                const rule = (learned || []).find(l => l.concepto_texto === normConcepto(c.texto));
-                if (!rule) { remaining.push(c); continue; }
-                if (rule.action === 'ignore') continue;
-                if (rule.action === 'map' && rule.field_key) {
-                  ocrFields[rule.field_key] = Math.round(((Number(ocrFields[rule.field_key])||0) + (Number(c.monto)||0)) * 100) / 100;
-                }
+      if (shared.tipoCarga === 'factura') {
+        setStatusFn && setStatusFn('OCR...');
+        try {
+          const b64 = await fileToBase64(f);
+          const d = await runOCR(b64, f.type || 'image/jpeg');
+          ocrFields = {
+            tipo_comprobante: d.tipoComprobante || null, nro_comprobante: d.nroComprobante || null,
+            razon_social: d.razonSocial || null, cuit: d.cuit || null, fecha_emision: d.fechaEmision || null,
+            moneda: d.moneda || 'ARS', tipo_cambio: d.tipoCambio || null,
+            subtotal_gravado: d.subtotalGravado || null, no_gravado: d.noGravado || null,
+            iva: d.iva || null, percepcion_iva: d.percepcionIva || null,
+            iibb_bsas: d.iibbBsAs || null, iibb_caba: d.iibbCaba || null,
+            total: d.total || null, cae: d.cae || null, cai: d.cai || null,
+          };
+          conceptosNoClasif = Array.isArray(d.conceptosNoClasificados) ? d.conceptosNoClasificados : [];
+          if (conceptosNoClasif.length) {
+            const textosNorm = conceptosNoClasif.map(c => normConcepto(c.texto)).filter(Boolean);
+            const { data: learned } = await supabase.from('learned_concepts').select('*').in('concepto_texto', textosNorm);
+            const remaining = [];
+            for (const c of conceptosNoClasif) {
+              const rule = (learned || []).find(l => l.concepto_texto === normConcepto(c.texto));
+              if (!rule) { remaining.push(c); continue; }
+              if (rule.action === 'ignore') continue;
+              if (rule.action === 'map' && rule.field_key) {
+                ocrFields[rule.field_key] = Math.round(((Number(ocrFields[rule.field_key])||0) + (Number(c.monto)||0)) * 100) / 100;
               }
-              conceptosNoClasif = remaining;
             }
-          } catch (err) { console.warn('OCR fail', err); setStatus('OCR fallo, cargar campos a mano.'); }
-        }
+            conceptosNoClasif = remaining;
+          }
+        } catch (err) { console.warn('OCR fail', err); }
       }
-      setStatus('Guardando...');
-      const initialState = conOc ? 'con_admin' : 'en_buzon';
-      const uploaderId = isAdmin ? actAsId : profile.id;
+      setStatusFn && setStatusFn('Guardando...');
+      const initialState = shared.conOc ? 'con_admin' : 'en_buzon';
+      const uploaderId = isAdmin ? shared.actAsId : profile.id;
       const payload = {
-        tipo_carga: tipoCarga, cost_center_id: ccId, forma_pago: formaPago, photo_path,
-        uploader_id: uploaderId, state: initialState, con_oc: conOc,
-        oc_numero: conOc ? ocNumero.trim() : null,
-        cuotas: formaPago === 'tarjeta' ? Number(cuotas)||1 : 1,
-        tarjeta: formaPago === 'tarjeta' ? (tarjeta || null) : null,
-        titular_id: formaPago === 'tarjeta' ? (titularId || uploaderId) : null,
+        tipo_carga: shared.tipoCarga, cost_center_id: shared.ccId, forma_pago: shared.formaPago, photo_path,
+        uploader_id: uploaderId, state: initialState, con_oc: shared.conOc,
+        oc_numero: shared.conOc ? shared.ocNumero.trim() : null,
+        cuotas: shared.formaPago === 'tarjeta' ? Number(shared.cuotas)||1 : 1,
+        tarjeta: shared.formaPago === 'tarjeta' ? (shared.tarjeta || null) : null,
+        titular_id: shared.formaPago === 'tarjeta' ? (shared.titularId || uploaderId) : null,
         ...ocrFields,
       };
-      if (tipoCarga === 'gasto_sin_factura') {
-        payload.concepto = concepto; payload.total = total || null;
+      if (shared.tipoCarga === 'gasto_sin_factura') {
+        payload.concepto = shared.concepto; payload.total = shared.total || null;
         payload.fecha_gasto = new Date().toISOString().slice(0,10);
       }
       let { data, error } = await supabase.from('invoices').insert(payload).select().single();
       if (error && /(tarjeta|titular_id)/i.test(error.message || '')) {
-        // Fallback si las columnas nuevas todavia no existen en la DB
         const { tarjeta: _t, titular_id: _ti, ...safe } = payload;
         ({ data, error } = await supabase.from('invoices').insert(safe).select().single());
       }
       if (error) throw error;
-      await logEvent(data.id, profile.id, 'uploaded', enNombreDe ? `en nombre de ${(cargadores.find(c => c.id === actAsId) || {}).nombre || ''}` : null);
-      // Guardar conceptos no clasificados restantes
+      await logEvent(data.id, profile.id, 'uploaded', shared.enNombreDe ? `en nombre de ${(cargadores.find(c => c.id === shared.actAsId) || {}).nombre || ''}` : null);
       if (conceptosNoClasif.length) {
         await supabase.from('learning_inbox').insert(conceptosNoClasif.map(c => ({
           concepto_texto: (c.texto || '').trim(), monto: Number(c.monto) || null, invoice_id: data.id, status: 'new',
         })));
       }
+      return { ok: true, invoice_id: data.id };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    const shared = { tipoCarga, ccId, formaPago, conOc, ocNumero, cuotas, tarjeta, titularId, actAsId, enNombreDe, concepto, total };
+    if (!ccId) { alert('Elegi centro de costo'); return; }
+    if (conOc && !ocNumero.trim()) { alert('Cargar el numero de OC'); return; }
+
+    if (bulkMode) {
+      if (!bulkFiles.length) { alert('Elegi los archivos'); return; }
+      setBusy(true);
+      setStatus(`Procesando 0/${bulkFiles.length}...`);
+      // Concurrencia limitada
+      const CONC = 3;
+      let done = 0, ok = 0, fail = 0;
+      const queue = [...bulkFiles];
+      async function worker() {
+        while (queue.length) {
+          const f = queue.shift();
+          setBulkProgress(p => ({ ...p, [f.name]: { state: 'procesando' } }));
+          const r = await processInvoiceFile(f, shared, null);
+          done++;
+          if (r.ok) { ok++; setBulkProgress(p => ({ ...p, [f.name]: { state: 'ok' } })); }
+          else { fail++; setBulkProgress(p => ({ ...p, [f.name]: { state: 'error', error: r.error } })); }
+          setStatus(`Procesando ${done}/${bulkFiles.length} (${ok} OK, ${fail} error)...`);
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONC, bulkFiles.length) }, worker));
+      setStatus(`Terminado: ${ok} OK, ${fail} con error.`);
+      onDone();
+      setBusy(false);
+      return;
+    }
+
+    // Single-file
+    if (!file && tipoCarga === 'factura') { alert('Sube una foto de la factura'); return; }
+    setBusy(true);
+    const r = await processInvoiceFile(file, shared, setStatus);
+    if (r.ok) {
       setStatus('Listo! ' + (conOc ? 'Fue directo a Administracion.' : 'Espera derivacion.'));
       setFile(null); setConcepto(''); setTotal(''); setCcId(''); setConOc(false); setOcNumero(''); setCuotas(1); setTarjeta(''); setTitularId(profile.id); setActAsId(profile.id);
       onDone();
       setTimeout(() => setStatus(''), 4000);
-    } catch (err) { alert('Error: ' + err.message); }
-    finally { setBusy(false); }
+    } else {
+      alert('Error: ' + r.error);
+    }
+    setBusy(false);
   }
 
   return (
     <form onSubmit={submit} className="bg-white rounded-xl border p-6 space-y-4">
-      <h2 className="text-lg font-semibold text-slate-900">Subir factura</h2>
-      <div className="flex gap-2">
-        <button type="button" onClick={() => setTipoCarga('factura')} className={`px-3 py-1.5 rounded text-sm ${tipoCarga === 'factura' ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>Con factura A/C</button>
-        <button type="button" onClick={() => setTipoCarga('gasto_sin_factura')} className={`px-3 py-1.5 rounded text-sm ${tipoCarga === 'gasto_sin_factura' ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>Sin factura</button>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-slate-900">Subir factura</h2>
+        {isAdmin && (
+          <label className="flex items-center gap-2 text-xs bg-purple-50 border border-purple-200 rounded-lg px-2 py-1 cursor-pointer" title="Solo admin - temporal para poblar mapeos">
+            <input type="checkbox" checked={bulkMode} onChange={e => { setBulkMode(e.target.checked); setBulkProgress({}); }} />
+            <span className="font-medium text-purple-800">Modo lote</span>
+          </label>
+        )}
       </div>
-      <div><label className="block text-sm font-medium mb-1">Foto {tipoCarga === 'gasto_sin_factura' && '(opcional)'}</label><PhotoPicker file={file} onChange={setFile} /></div>
+      {!bulkMode && (
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setTipoCarga('factura')} className={`px-3 py-1.5 rounded text-sm ${tipoCarga === 'factura' ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>Con factura A/C</button>
+          <button type="button" onClick={() => setTipoCarga('gasto_sin_factura')} className={`px-3 py-1.5 rounded text-sm ${tipoCarga === 'gasto_sin_factura' ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>Sin factura</button>
+        </div>
+      )}
+      {!bulkMode && <div><label className="block text-sm font-medium mb-1">Foto {tipoCarga === 'gasto_sin_factura' && '(opcional)'}</label><PhotoPicker file={file} onChange={setFile} /></div>}
+      {bulkMode && (
+        <div className="rounded-lg border-2 border-dashed border-purple-300 bg-purple-50 p-4 space-y-3">
+          <div className="text-xs text-purple-900">
+            <b>Modo lote (temporal, solo admin):</b> selecciona muchas facturas de una y se procesan en paralelo (3 en simultaneo). Todas comparten el centro de costo y forma de pago elegidos abajo. Sirve para poblar los mapeos del OCR con datos reales.
+          </div>
+          <input type="file" multiple accept="image/*,application/pdf" onChange={e => { const fs = Array.from(e.target.files || []); setBulkFiles(fs); setBulkProgress({}); }} className="block w-full text-sm" />
+          {bulkFiles.length > 0 && (
+            <div className="text-sm">
+              <div className="font-medium mb-1">{bulkFiles.length} archivo{bulkFiles.length !== 1 ? 's' : ''} seleccionado{bulkFiles.length !== 1 ? 's' : ''}</div>
+              <div className="max-h-64 overflow-y-auto border rounded bg-white divide-y text-xs">
+                {bulkFiles.map(f => {
+                  const p = bulkProgress[f.name];
+                  const badge = !p ? { bg: 'bg-slate-100', text: 'text-slate-600', label: 'pendiente' }
+                    : p.state === 'ok' ? { bg: 'bg-emerald-100', text: 'text-emerald-800', label: 'OK' }
+                    : p.state === 'error' ? { bg: 'bg-rose-100', text: 'text-rose-800', label: 'error' }
+                    : { bg: 'bg-amber-100', text: 'text-amber-800', label: 'procesando...' };
+                  return (
+                    <div key={f.name} className="flex items-center justify-between gap-2 px-2 py-1">
+                      <span className="truncate flex-1">{f.name}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${badge.bg} ${badge.text}`}>{badge.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {tipoCarga === 'gasto_sin_factura' && <>
         <div><label className="block text-sm font-medium mb-1">Concepto</label><input required value={concepto} onChange={e => setConcepto(e.target.value)} className="w-full border rounded px-2 py-1" placeholder="Ej: Suscripcion Adobe" /></div>
         <div><label className="block text-sm font-medium mb-1">Monto</label><input type="number" step="0.01" value={total} onChange={e => setTotal(e.target.value)} className="w-full border rounded px-2 py-1" /></div>
