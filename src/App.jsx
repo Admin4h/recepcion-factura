@@ -545,7 +545,7 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
               }
               conceptosNoClasif = remaining;
             }
-          } catch (err) { console.warn('OCR fail', err); }
+          } catch (err) { console.warn('OCR fail', err); setStatus('OCR fallo, cargar campos a mano.'); }
         }
       }
       setStatus('Guardando...');
