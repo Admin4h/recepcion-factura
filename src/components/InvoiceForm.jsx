@@ -101,7 +101,11 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, real
               <Field label="CUIT"><input disabled={!canEditFields} value={form.cuit || ''} onChange={e => set('cuit', e.target.value)} className={inp} /></Field>
               <Field label="Fecha"><input disabled={!canEditFields} type="date" value={form.fecha_emision || ''} onChange={e => set('fecha_emision', e.target.value || null)} className={inp} /></Field>
               <Field label="Subtotal"><input disabled={!canEditFields} type="number" step="0.01" value={form.subtotal_gravado || ''} onChange={e => set('subtotal_gravado', e.target.value || null)} className={inp} /></Field>
+              <Field label="No gravado"><input disabled={!canEditFields} type="number" step="0.01" value={form.no_gravado || ''} onChange={e => set('no_gravado', e.target.value || null)} className={inp} /></Field>
               <Field label="IVA"><input disabled={!canEditFields} type="number" step="0.01" value={form.iva || ''} onChange={e => set('iva', e.target.value || null)} className={inp} /></Field>
+              <Field label="Percepción IVA"><input disabled={!canEditFields} type="number" step="0.01" value={form.percepcion_iva || ''} onChange={e => set('percepcion_iva', e.target.value || null)} className={inp} /></Field>
+              <Field label="IIBB Bs As"><input disabled={!canEditFields} type="number" step="0.01" value={form.iibb_bsas || ''} onChange={e => set('iibb_bsas', e.target.value || null)} className={inp} /></Field>
+              <Field label="IIBB CABA"><input disabled={!canEditFields} type="number" step="0.01" value={form.iibb_caba || ''} onChange={e => set('iibb_caba', e.target.value || null)} className={inp} /></Field>
               <Field label="Total"><input disabled={!canEditFields} type="number" step="0.01" value={form.total || ''} onChange={e => set('total', e.target.value || null)} className={inp} /></Field>
               <Field label="Moneda"><input disabled={!canEditFields} value={form.moneda || 'ARS'} onChange={e => set('moneda', e.target.value)} className={inp} /></Field>
               <div className="col-span-2"><Field label="CAE"><input disabled={!canEditFields} value={form.cae || ''} onChange={e => set('cae', e.target.value)} className={inp} /></Field></div>
