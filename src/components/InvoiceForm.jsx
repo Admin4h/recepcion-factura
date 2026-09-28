@@ -17,12 +17,21 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, real
   const [saving, setSaving] = useState(false);
   const [assignBuyer, setAssignBuyer] = useState('');
   const [bounceReason, setBounceReason] = useState('');
+  const [events, setEvents] = useState([]);
 
   useEffect(() => { setForm(invoice); }, [invoice]);
   useEffect(() => {
     if (invoice?.photo_path) getPhotoUrl(invoice.photo_path).then(setPhotoUrl);
     else setPhotoUrl(null);
   }, [invoice?.photo_path]);
+  useEffect(() => {
+    if (!invoice?.id) { setEvents([]); return; }
+    let cancel = false;
+    supabase.from('invoice_events').select('*, actor:actor_id(nombre)').eq('invoice_id', invoice.id).order('created_at', { ascending: true }).then(({ data }) => {
+      if (!cancel) setEvents(data || []);
+    });
+    return () => { cancel = true; };
+  }, [invoice?.id, saving]);
 
   const isAdmin = roles.includes('administracion');
   const isBuyer = roles.includes('comprador');
@@ -108,12 +117,14 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, real
               <Field label="IIBB CABA"><input disabled={!canEditFields} type="number" step="0.01" value={form.iibb_caba || ''} onChange={e => set('iibb_caba', e.target.value || null)} className={inp} /></Field>
               <Field label="Total"><input disabled={!canEditFields} type="number" step="0.01" value={form.total || ''} onChange={e => set('total', e.target.value || null)} className={inp} /></Field>
               <Field label="Moneda"><input disabled={!canEditFields} value={form.moneda || 'ARS'} onChange={e => set('moneda', e.target.value)} className={inp} /></Field>
+              <div className="col-span-2"><Field label={`N° Orden de Compra${form.con_oc ? '' : ' (opcional)'}`}><input disabled={!canEditFields} value={form.oc_numero || ''} onChange={e => set('oc_numero', e.target.value || null)} placeholder="Ej: 12" className={inp} /></Field></div>
               <div className="col-span-2"><Field label="CAE"><input disabled={!canEditFields} value={form.cae || ''} onChange={e => set('cae', e.target.value)} className={inp} /></Field></div>
               <div className="col-span-2 flex items-baseline justify-between border-t pt-2 mt-1">
                 <span className="text-xs uppercase text-slate-500 tracking-wide">Total</span>
                 <span className="text-xl font-semibold">{money(form.total, form.moneda)}</span>
               </div>
             </div>
+            <EventsHistory events={events} />
           </div>
         </div>
         <div className="px-4 py-2 border-t bg-slate-50 flex flex-wrap gap-2 justify-end items-center flex-shrink-0">
@@ -221,6 +232,40 @@ function Field({ label, children }) {
 function StateBadgeInline({ state }) {
   const colors = { en_buzon: 'bg-amber-100 text-amber-800', con_comprador: 'bg-indigo-100 text-indigo-800', con_admin: 'bg-blue-100 text-blue-800', aprobada: 'bg-emerald-100 text-emerald-800', rechazada: 'bg-rose-100 text-rose-800' };
   return <span className={`px-2 py-0.5 rounded text-xs ${colors[state] || 'bg-slate-100'}`}>{state}</span>;
+}
+
+const ACTION_LABELS = {
+  uploaded: 'Subida',
+  con_comprador: 'Derivada a comprador',
+  con_admin: 'Enviada a admin',
+  en_buzon: 'Devuelta al buzón',
+  aprobada: 'Aprobada',
+  rechazada: 'Rechazada',
+};
+
+function EventsHistory({ events }) {
+  if (!events || events.length === 0) return null;
+  const fmt = ts => {
+    try { return new Date(ts).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+    catch { return ts; }
+  };
+  return (
+    <div className="mt-4 border-t pt-3">
+      <div className="text-[11px] uppercase text-slate-500 tracking-wide mb-2">Historial</div>
+      <ol className="space-y-1.5">
+        {events.map(ev => (
+          <li key={ev.id} className="flex items-start gap-2 text-xs">
+            <span className="text-slate-400 tabular-nums flex-shrink-0 w-24">{fmt(ev.created_at)}</span>
+            <StateBadgeInline state={ev.action} />
+            <div className="flex-1 min-w-0 text-slate-700">
+              <span className="text-slate-500">{ev.actor?.nombre || ''}</span>
+              {ev.note && <span className="text-slate-500"> — {ev.note}</span>}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 }
 
 export { money };
