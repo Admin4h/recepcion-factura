@@ -200,6 +200,18 @@ function AdminFacturas({ profile, roles }) {
   );
 }
 
+// Normaliza el texto de un concepto para comparar y guardar reglas: minusculas,
+// trim, colapsa espacios y saca el prefijo tipo "10 - " o "IU - " (codigos AFIP)
+// para que "10 - Impuesto Interno" y "Impuesto interno" queden como la misma clave.
+function normConcepto(t) {
+  return (t || '')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/^[0-9a-z]{1,4}\s*-\s*/i, '');
+}
+
 function AdminConceptos() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -213,8 +225,8 @@ function AdminConceptos() {
   const groups = useMemo(() => {
     const g = {};
     for (const it of items) {
-      const k = (it.concepto_texto || '').trim().toLowerCase();
-      if (!g[k]) g[k] = { texto: it.concepto_texto, items: [] };
+      const k = normConcepto(it.concepto_texto);
+      if (!g[k]) g[k] = { texto: it.concepto_texto, key: k, items: [] };
       g[k].items.push(it);
     }
     return Object.values(g);
@@ -222,13 +234,13 @@ function AdminConceptos() {
   const FIELDS = [['iva','IVA'],['percepcion_iva','Percepcion IVA'],['iibb_bsas','IIBB Bs As'],['iibb_caba','IIBB CABA'],['no_gravado','No gravado'],['subtotal_gravado','Subtotal gravado']];
 
   async function ignorar(group) {
-    await supabase.from('learned_concepts').upsert({ concepto_texto: group.texto, action: 'ignore', field_key: null }, { onConflict: 'concepto_texto' });
+    await supabase.from('learned_concepts').upsert({ concepto_texto: group.key, action: 'ignore', field_key: null }, { onConflict: 'concepto_texto' });
     await supabase.from('learning_inbox').update({ status: 'ignored' }).in('id', group.items.map(i => i.id));
     reload();
   }
   async function mapear(group, fieldKey) {
     if (!fieldKey) return;
-    await supabase.from('learned_concepts').upsert({ concepto_texto: group.texto, action: 'map', field_key: fieldKey }, { onConflict: 'concepto_texto' });
+    await supabase.from('learned_concepts').upsert({ concepto_texto: group.key, action: 'map', field_key: fieldKey }, { onConflict: 'concepto_texto' });
     // Aplicar el mapeo a las facturas de las que salieron estos items:
     // sumar el monto al campo destino en cada invoice afectada.
     const porInvoice = {};
@@ -518,13 +530,13 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
               total: d.total || null, cae: d.cae || null, cai: d.cai || null,
             };
             conceptosNoClasif = Array.isArray(d.conceptosNoClasificados) ? d.conceptosNoClasificados : [];
-            // Aplicar reglas aprendidas
+            // Aplicar reglas aprendidas (match por texto normalizado)
             if (conceptosNoClasif.length) {
-              const textos = conceptosNoClasif.map(c => (c.texto||'').trim()).filter(Boolean);
-              const { data: learned } = await supabase.from('learned_concepts').select('*').in('concepto_texto', textos);
+              const textosNorm = conceptosNoClasif.map(c => normConcepto(c.texto)).filter(Boolean);
+              const { data: learned } = await supabase.from('learned_concepts').select('*').in('concepto_texto', textosNorm);
               const remaining = [];
               for (const c of conceptosNoClasif) {
-                const rule = (learned || []).find(l => l.concepto_texto === (c.texto||'').trim());
+                const rule = (learned || []).find(l => l.concepto_texto === normConcepto(c.texto));
                 if (!rule) { remaining.push(c); continue; }
                 if (rule.action === 'ignore') continue;
                 if (rule.action === 'map' && rule.field_key) {
