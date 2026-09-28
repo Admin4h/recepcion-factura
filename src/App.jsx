@@ -252,7 +252,7 @@ function AdminConceptos() {
     if (invoiceIds.length) {
       const { data: invs } = await supabase.from('invoices').select(`id, ${fieldKey}`).in('id', invoiceIds);
       for (const inv of invs || []) {
-        const nuevo = (Number(inv[fieldKey]) || 0) + porInvoice[inv.id];
+        const nuevo = Math.round(((Number(inv[fieldKey]) || 0) + porInvoice[inv.id]) * 100) / 100;
         await supabase.from('invoices').update({ [fieldKey]: nuevo }).eq('id', inv.id);
       }
     }
@@ -540,7 +540,7 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
                 if (!rule) { remaining.push(c); continue; }
                 if (rule.action === 'ignore') continue;
                 if (rule.action === 'map' && rule.field_key) {
-                  ocrFields[rule.field_key] = (Number(ocrFields[rule.field_key])||0) + (Number(c.monto)||0);
+                  ocrFields[rule.field_key] = Math.round(((Number(ocrFields[rule.field_key])||0) + (Number(c.monto)||0)) * 100) / 100;
                 }
               }
               conceptosNoClasif = remaining;
