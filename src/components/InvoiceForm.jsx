@@ -102,7 +102,7 @@ export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentPro
         razon_social: d.razonSocial || null, cuit: d.cuit || null, fecha_emision: d.fechaEmision || null,
         moneda: d.moneda || 'ARS', tipo_cambio: d.tipoCambio || null,
         subtotal_gravado: d.subtotalGravado || null, no_gravado: d.noGravado || null,
-        iva: d.iva || null, percepcion_iva: d.percepcionIva || null,
+        iva: d.iva || null, iva_105: d.iva105 || null, iva_27: d.iva27 || null, percepcion_iva: d.percepcionIva || null,
         iibb_bsas: d.iibbBsAs || null, iibb_caba: d.iibbCaba || null,
         total: d.total || null, cae: d.cae || null, cai: d.cai || null,
         updated_at: new Date().toISOString(),
@@ -218,7 +218,9 @@ export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentPro
               <Field label="Fecha"><input disabled={!canEditFields} type="date" value={form.fecha_emision || ''} onChange={e => set('fecha_emision', e.target.value || null)} className={inp} /></Field>
               <Field label="Subtotal"><input disabled={!canEditFields} type="number" step="0.01" value={form.subtotal_gravado || ''} onChange={e => set('subtotal_gravado', e.target.value || null)} className={inp} /></Field>
               <Field label="No gravado"><input disabled={!canEditFields} type="number" step="0.01" value={form.no_gravado || ''} onChange={e => set('no_gravado', e.target.value || null)} className={inp} /></Field>
-              <Field label="IVA"><input disabled={!canEditFields} type="number" step="0.01" value={form.iva || ''} onChange={e => set('iva', e.target.value || null)} className={inp} /></Field>
+              <Field label="IVA 21%"><input disabled={!canEditFields} type="number" step="0.01" value={form.iva || ''} onChange={e => set('iva', e.target.value || null)} className={inp} /></Field>
+              <Field label="IVA 10.5%"><input disabled={!canEditFields} type="number" step="0.01" value={form.iva_105 || ''} onChange={e => set('iva_105', e.target.value || null)} className={inp} /></Field>
+              <Field label="IVA 27%"><input disabled={!canEditFields} type="number" step="0.01" value={form.iva_27 || ''} onChange={e => set('iva_27', e.target.value || null)} className={inp} /></Field>
               <Field label="Percepción IVA"><input disabled={!canEditFields} type="number" step="0.01" value={form.percepcion_iva || ''} onChange={e => set('percepcion_iva', e.target.value || null)} className={inp} /></Field>
               <Field label="IIBB Bs As"><input disabled={!canEditFields} type="number" step="0.01" value={form.iibb_bsas || ''} onChange={e => set('iibb_bsas', e.target.value || null)} className={inp} /></Field>
               <Field label="IIBB CABA"><input disabled={!canEditFields} type="number" step="0.01" value={form.iibb_caba || ''} onChange={e => set('iibb_caba', e.target.value || null)} className={inp} /></Field>
