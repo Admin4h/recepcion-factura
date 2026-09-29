@@ -231,7 +231,7 @@ function AdminConceptos() {
     }
     return Object.values(g);
   }, [items]);
-  const FIELDS = [['iva','IVA'],['percepcion_iva','Percepcion IVA'],['iibb_bsas','IIBB Bs As'],['iibb_caba','IIBB CABA'],['no_gravado','No gravado'],['subtotal_gravado','Subtotal gravado']];
+  const FIELDS = [['iva','IVA 21%'],['iva_105','IVA 10.5%'],['iva_27','IVA 27%'],['percepcion_iva','Percepcion IVA'],['iibb_bsas','IIBB Bs As'],['iibb_caba','IIBB CABA'],['no_gravado','No gravado'],['subtotal_gravado','Subtotal gravado']];
 
   async function ignorar(group) {
     await supabase.from('learned_concepts').upsert({ concepto_texto: group.key, action: 'ignore', field_key: null }, { onConflict: 'concepto_texto' });
@@ -522,7 +522,7 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
             razon_social: d.razonSocial || null, cuit: d.cuit || null, fecha_emision: d.fechaEmision || null,
             moneda: d.moneda || 'ARS', tipo_cambio: d.tipoCambio || null,
             subtotal_gravado: d.subtotalGravado || null, no_gravado: d.noGravado || null,
-            iva: d.iva || null, percepcion_iva: d.percepcionIva || null,
+            iva: d.iva || null, iva_105: d.iva105 || null, iva_27: d.iva27 || null, percepcion_iva: d.percepcionIva || null,
             iibb_bsas: d.iibbBsAs || null, iibb_caba: d.iibbCaba || null,
             total: d.total || null, cae: d.cae || null, cai: d.cai || null,
           };
