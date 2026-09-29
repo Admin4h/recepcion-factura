@@ -9,7 +9,7 @@ const money = (n, cur = 'ARS') => {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: cur, minimumFractionDigits: 2 }).format(num);
 };
 
-export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, realProfile, roles, viewAs, onSave, onClose }) {
+export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentProfile, realProfile, roles, viewAs, onSave, onClose, onNavigate }) {
   const actor = realProfile || currentProfile;
   const enNombreDe = realProfile && realProfile.id !== currentProfile?.id;
   const [form, setForm] = useState(invoice);
@@ -18,6 +18,18 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, real
   const [assignBuyer, setAssignBuyer] = useState('');
   const [bounceReason, setBounceReason] = useState('');
   const [events, setEvents] = useState([]);
+
+  // Navegacion siguiente/anterior dentro del listado actual
+  const idx = siblings ? siblings.findIndex(x => x.id === invoice?.id) : -1;
+  const hasList = siblings && siblings.length > 0 && idx >= 0;
+  const next = hasList && idx < siblings.length - 1 ? siblings[idx + 1] : null;
+  const prev = hasList && idx > 0 ? siblings[idx - 1] : null;
+  // Al terminar una accion (save / delete / approve / reject) saltar al siguiente
+  // sin cerrar el modal. Si no hay siguiente, cerrar.
+  const advance = () => {
+    if (next && onNavigate) onNavigate(next);
+    else onClose && onClose();
+  };
 
   useEffect(() => { setForm(invoice); }, [invoice]);
   useEffect(() => {
@@ -39,8 +51,6 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, real
   const isMyUpload = invoice?.uploader_id === currentProfile?.id;
   const state = form.state;
 
-  // Decide qué acciones mostrar segun viewAs (contexto de solapa)
-  // viewAs: 'admin' | 'comprador' | 'cargador'
   const showAdminActions = isAdmin && viewAs === 'admin';
   const showBuyerActions = isMyBuyer && state === 'con_comprador' && (viewAs === 'comprador' || (viewAs === 'admin' && !showAdminActions));
   const showUploaderActions = isMyUpload && state === 'en_buzon' && viewAs === 'cargador';
@@ -59,26 +69,51 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, real
         const nota = [extra.bounce_reason, enNombreDe ? `en nombre de ${currentProfile.nombre}` : null].filter(Boolean).join(' - ') || null;
         await logEvent(invoice.id, actor.id, newState, nota);
       }
-      onSave();
+      onSave && onSave();
+      // Si estamos en una lista, saltar al siguiente en vez de cerrar
+      if (hasList) advance();
     } catch (err) { alert('Error: ' + err.message); }
     finally { setSaving(false); }
   }
 
-  async function remove() {
+  const canDelete = (isAdmin && viewAs === 'admin') || (isMyUpload && state === 'en_buzon');
+
+  async function remove(skipConfirm = false) {
     const nombre = (form.razon_social || form.concepto || 'sin proveedor') + ' ' + (form.nro_comprobante || '');
-    if (!window.confirm('¿Borrar definitivamente esta carga?\n\n' + nombre + '\n\nEsta acción no se puede deshacer.')) return;
+    if (!skipConfirm && !window.confirm('¿Borrar definitivamente esta carga?\n\n' + nombre + '\n\nEsta acción no se puede deshacer.')) return;
     setSaving(true);
     try {
       const { data, error } = await supabase.from('invoices').delete().eq('id', invoice.id).select('id');
       if (error) throw error;
       if (!data || data.length === 0) throw new Error('No tiene permiso para borrar esta carga.');
       if (invoice.photo_path) await supabase.storage.from('invoice-photos').remove([invoice.photo_path]);
-      onSave();
+      onSave && onSave();
+      if (hasList) advance();
     } catch (err) { alert('Error al borrar: ' + err.message); }
     finally { setSaving(false); }
   }
 
-  const canDelete = (isAdmin && viewAs === 'admin') || (isMyUpload && state === 'en_buzon');
+  // Atajos de teclado
+  useEffect(() => {
+    function onKey(e) {
+      const t = e.target;
+      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      if (e.key === 'Escape') { e.preventDefault(); onClose && onClose(); return; }
+      if (inField && e.key !== 'Delete') return;
+      if (saving) return;
+      if (e.key === 'Delete' && !inField && canDelete) { e.preventDefault(); remove(); return; }
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        if (next && onNavigate) { e.preventDefault(); onNavigate(next); }
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        if (prev && onNavigate) { e.preventDefault(); onNavigate(prev); }
+      } else if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) {
+        if (canEditFields) { e.preventDefault(); save(null); }
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [invoice?.id, canDelete, canEditFields, next?.id, prev?.id, saving]);
+
   const inp = 'w-full border rounded px-2 py-1 text-sm disabled:bg-slate-50';
 
   if (!invoice) return null;
@@ -95,7 +130,16 @@ export function InvoiceForm({ invoice, costCenters, buyers, currentProfile, real
               {enNombreDe && <span className="ml-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800">Actuando como {currentProfile.nombre}</span>}
             </div>
           </div>
-          <button onClick={onClose} className="px-3 py-1 text-slate-600 hover:bg-slate-100 rounded flex-shrink-0">Cerrar</button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {hasList && (
+              <>
+                <span className="text-xs text-slate-500 tabular-nums" title="Atajos: ← → navegar · Supr borrar · Ctrl+S guardar · Esc cerrar">{idx + 1} / {siblings.length}</span>
+                <button type="button" disabled={!prev} onClick={() => prev && onNavigate(prev)} className="w-8 h-8 rounded hover:bg-slate-100 disabled:opacity-30 text-slate-600" title="Anterior (←)">←</button>
+                <button type="button" disabled={!next} onClick={() => next && onNavigate(next)} className="w-8 h-8 rounded hover:bg-slate-100 disabled:opacity-30 text-slate-600" title="Siguiente (→)">→</button>
+              </>
+            )}
+            <button onClick={onClose} className="px-3 py-1 text-slate-600 hover:bg-slate-100 rounded" title="Cerrar (Esc)">Cerrar</button>
+          </div>
         </div>
         {form.bounce_reason && <div className="mx-4 mt-2 px-3 py-1 bg-rose-50 text-rose-800 text-sm rounded-lg flex-shrink-0"><b>Motivo rechazo:</b> {form.bounce_reason}</div>}
         <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-4 p-4 overflow-hidden">
