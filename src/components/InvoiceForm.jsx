@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getPhotoUrl, logEvent } from '../lib/db';
+import { getPhotoUrl, logEvent, runOCR, fileToBase64 } from '../lib/db';
 import { supabase } from '../supabaseClient';
 
 const money = (n, cur = 'ARS') => {
@@ -8,6 +8,11 @@ const money = (n, cur = 'ARS') => {
   if (isNaN(num)) return '-';
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: cur, minimumFractionDigits: 2 }).format(num);
 };
+
+// Duplicado del normConcepto de App.jsx (para las reglas de learned_concepts)
+function normConcepto(t) {
+  return (t || '').toString().trim().toLowerCase().replace(/\s+/g, ' ').replace(/^[0-9a-z]{1,4}\s*-\s*/i, '');
+}
 
 export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentProfile, realProfile, roles, viewAs, onSave, onClose, onNavigate }) {
   const actor = realProfile || currentProfile;
@@ -78,6 +83,59 @@ export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentPro
 
   const canDelete = (isAdmin && viewAs === 'admin') || (isMyUpload && state === 'en_buzon');
 
+  // Reintentar OCR sobre la foto ya subida (para facturas donde la corrida original fallo).
+  const needsOcr = !form.razon_social && !form.cuit && !form.total && !form.nro_comprobante;
+  const [retrying, setRetrying] = useState(false);
+  async function retryOcr() {
+    if (!invoice?.photo_path) { alert('No hay foto para reprocesar'); return; }
+    setRetrying(true);
+    try {
+      const { data: signed } = await supabase.storage.from('invoice-photos').createSignedUrl(invoice.photo_path, 600);
+      if (!signed?.signedUrl) throw new Error('No pude obtener la foto');
+      const resp = await fetch(signed.signedUrl);
+      const blob = await resp.blob();
+      const mimeType = blob.type || (/\.pdf$/i.test(invoice.photo_path) ? 'application/pdf' : 'image/jpeg');
+      const b64 = await fileToBase64(new File([blob], 'x', { type: mimeType }));
+      const d = await runOCR(b64, mimeType);
+      const patch = {
+        tipo_comprobante: d.tipoComprobante || null, nro_comprobante: d.nroComprobante || null,
+        razon_social: d.razonSocial || null, cuit: d.cuit || null, fecha_emision: d.fechaEmision || null,
+        moneda: d.moneda || 'ARS', tipo_cambio: d.tipoCambio || null,
+        subtotal_gravado: d.subtotalGravado || null, no_gravado: d.noGravado || null,
+        iva: d.iva || null, percepcion_iva: d.percepcionIva || null,
+        iibb_bsas: d.iibbBsAs || null, iibb_caba: d.iibbCaba || null,
+        total: d.total || null, cae: d.cae || null, cai: d.cai || null,
+        updated_at: new Date().toISOString(),
+      };
+      // Aplicar reglas aprendidas sobre conceptos no clasificados
+      const conceptos = Array.isArray(d.conceptosNoClasificados) ? d.conceptosNoClasificados : [];
+      let remaining = conceptos;
+      if (conceptos.length) {
+        const textosNorm = conceptos.map(c => normConcepto(c.texto)).filter(Boolean);
+        const { data: learned } = await supabase.from('learned_concepts').select('*').in('concepto_texto', textosNorm);
+        remaining = [];
+        for (const c of conceptos) {
+          const rule = (learned || []).find(l => l.concepto_texto === normConcepto(c.texto));
+          if (!rule) { remaining.push(c); continue; }
+          if (rule.action === 'ignore') continue;
+          if (rule.action === 'map' && rule.field_key) {
+            patch[rule.field_key] = Math.round(((Number(patch[rule.field_key])||0) + (Number(c.monto)||0)) * 100) / 100;
+          }
+        }
+      }
+      const { error } = await supabase.from('invoices').update(patch).eq('id', invoice.id);
+      if (error) throw error;
+      if (remaining.length) {
+        await supabase.from('learning_inbox').insert(remaining.map(c => ({
+          concepto_texto: (c.texto || '').trim(), monto: Number(c.monto) || null, invoice_id: invoice.id, status: 'new',
+        })));
+      }
+      setForm({ ...form, ...patch });
+      onSave && onSave();
+    } catch (err) { alert('OCR fallo: ' + err.message); }
+    finally { setRetrying(false); }
+  }
+
   async function remove(skipConfirm = false) {
     const nombre = (form.razon_social || form.concepto || 'sin proveedor') + ' ' + (form.nro_comprobante || '');
     if (!skipConfirm && !window.confirm('¿Borrar definitivamente esta carga?\n\n' + nombre + '\n\nEsta acción no se puede deshacer.')) return;
@@ -131,6 +189,11 @@ export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentPro
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {canEditFields && (
+              <button type="button" disabled={retrying} onClick={retryOcr} className={`px-3 py-1 text-xs rounded font-medium ${needsOcr ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'} disabled:opacity-50`} title="Correr OCR de nuevo sobre esta foto">
+                {retrying ? 'OCR...' : (needsOcr ? '⚠ Reintentar OCR' : 'Reintentar OCR')}
+              </button>
+            )}
             {hasList && (
               <>
                 <span className="text-xs text-slate-500 tabular-nums" title="Atajos: ← → navegar · Supr borrar · Ctrl+S guardar · Esc cerrar">{idx + 1} / {siblings.length}</span>
