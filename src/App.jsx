@@ -594,6 +594,8 @@ function UploadForm({ profile, roles, costCenters, allProfiles = [], onDone }) {
             iibb_bsas: d.iibbBsAs || null, iibb_caba: d.iibbCaba || null,
             total: d.total || null, cae: d.cae || null, cai: d.cai || null,
           };
+          ocrFields.ocr_raw = d;
+          ocrFields.ocr_at = new Date().toISOString();
           conceptosNoClasif = Array.isArray(d.conceptosNoClasificados) ? d.conceptosNoClasificados : [];
           if (conceptosNoClasif.length) {
             const textosNorm = conceptosNoClasif.map(c => normConcepto(c.texto)).filter(Boolean);

@@ -105,6 +105,7 @@ export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentPro
         iva: d.iva || null, iva_105: d.iva105 || null, iva_27: d.iva27 || null, percepcion_iva: d.percepcionIva || null,
         iibb_bsas: d.iibbBsAs || null, iibb_caba: d.iibbCaba || null,
         total: d.total || null, cae: d.cae || null, cai: d.cai || null,
+        ocr_raw: d, ocr_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
       // Aplicar reglas aprendidas sobre conceptos no clasificados
