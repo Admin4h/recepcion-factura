@@ -233,6 +233,7 @@ export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentPro
                 <span className="text-xl font-semibold">{money(form.total, form.moneda)}</span>
               </div>
             </div>
+            <PendingConcepts invoiceId={invoice.id} onChanged={onSave} />
             <EventsHistory events={events} />
           </div>
         </div>
@@ -363,8 +364,76 @@ const ACTION_LABELS = {
   rechazada: 'Rechazada',
 };
 
-function EventsHistory({ events }) {
-  if (!events || events.length === 0) return null;
+const CONCEPT_FIELDS = [['iva','IVA 21%'],['iva_105','IVA 10.5%'],['iva_27','IVA 27%'],['percepcion_iva','Percepcion IVA'],['iibb_bsas','IIBB Bs As'],['iibb_caba','IIBB CABA'],['no_gravado','No gravado'],['subtotal_gravado','Subtotal gravado']];
+
+function PendingConcepts({ invoiceId, onChanged }) {
+  const [items, setItems] = useState([]);
+  const [busy, setBusy] = useState({});
+
+  const reload = () => {
+    if (!invoiceId) { setItems([]); return; }
+    supabase.from('learning_inbox').select('*').eq('invoice_id', invoiceId).eq('status', 'new').order('id').then(({ data }) => setItems(data || []));
+  };
+  useEffect(() => { reload(); }, [invoiceId]);
+
+  async function mapear(item, fieldKey) {
+    if (!fieldKey) return;
+    setBusy(b => ({ ...b, [item.id]: true }));
+    try {
+      const key = normConcepto(item.concepto_texto);
+      await supabase.from('learned_concepts').upsert({ concepto_texto: key, action: 'map', field_key: fieldKey }, { onConflict: 'concepto_texto' });
+      // Sumar el monto al campo destino de esta factura
+      const { data: inv } = await supabase.from('invoices').select(`id, ${fieldKey}`).eq('id', invoiceId).single();
+      if (inv) {
+        const nuevo = Math.round(((Number(inv[fieldKey]) || 0) + (Number(item.monto) || 0)) * 100) / 100;
+        await supabase.from('invoices').update({ [fieldKey]: nuevo }).eq('id', invoiceId);
+      }
+      await supabase.from('learning_inbox').update({ status: 'mapped', mapped_to_field: fieldKey }).eq('id', item.id);
+      // Aplicar la misma regla nueva a otros items pendientes con el mismo texto normalizado
+      await supabase.from('learning_inbox').update({ status: 'mapped', mapped_to_field: fieldKey }).eq('status', 'new').ilike('concepto_texto', item.concepto_texto);
+      reload();
+      onChanged && onChanged();
+    } catch (err) { alert('Error al mapear: ' + err.message); }
+    finally { setBusy(b => ({ ...b, [item.id]: false })); }
+  }
+  async function ignorar(item) {
+    setBusy(b => ({ ...b, [item.id]: true }));
+    try {
+      const key = normConcepto(item.concepto_texto);
+      await supabase.from('learned_concepts').upsert({ concepto_texto: key, action: 'ignore', field_key: null }, { onConflict: 'concepto_texto' });
+      await supabase.from('learning_inbox').update({ status: 'ignored' }).eq('id', item.id);
+      reload();
+      onChanged && onChanged();
+    } catch (err) { alert('Error: ' + err.message); }
+    finally { setBusy(b => ({ ...b, [item.id]: false })); }
+  }
+
+  if (!items.length) return null;
+  return (
+    <div className="mt-4 border-t pt-3">
+      <div className="text-[11px] uppercase text-slate-500 tracking-wide mb-2">Conceptos sin clasificar ({items.length})</div>
+      <div className="space-y-2">
+        {items.map(it => (
+          <div key={it.id} className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs space-y-1">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="font-medium text-slate-900 truncate">{it.concepto_texto}</span>
+              <span className="tabular-nums text-slate-700 flex-shrink-0">{new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 2 }).format(Number(it.monto) || 0)}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <select disabled={busy[it.id]} onChange={e => mapear(it, e.target.value)} className="flex-1 border rounded px-1 py-0.5 text-xs bg-white">
+                <option value="">Mapear a campo...</option>
+                {CONCEPT_FIELDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+              <button type="button" disabled={busy[it.id]} onClick={() => ignorar(it)} className="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 rounded text-xs">Ignorar</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EventsHistory({ events }) {  if (!events || events.length === 0) return null;
   const fmt = ts => {
     try { return new Date(ts).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
     catch { return ts; }
