@@ -189,7 +189,7 @@ export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentPro
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            {canEditFields && (
+            {invoice?.photo_path && (
               <button type="button" disabled={retrying} onClick={retryOcr} className={`px-3 py-1 text-xs rounded font-medium ${needsOcr ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'} disabled:opacity-50`} title="Correr OCR de nuevo sobre esta foto">
                 {retrying ? 'OCR...' : (needsOcr ? '⚠ Reintentar OCR' : 'Reintentar OCR')}
               </button>
