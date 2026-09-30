@@ -118,8 +118,8 @@ function CompradorPane({ profile, roles }) {
           {enNombreDe && <span className="text-sm text-amber-800">Todo lo que haga queda registrado a su nombre, en nombre de {acting.nombre}.</span>}
         </div>
       )}
-      <section><h2 className="text-lg font-semibold text-slate-900 mb-3">Buzon general <span className="text-slate-400 font-normal text-sm">({buzon.filter(i => !i.con_oc).length})</span></h2><InvoiceList rows={buzon.filter(i => !i.con_oc)} onOpen={setSelected} /></section>
       <section><h2 className="text-lg font-semibold text-slate-900 mb-3">{titulo} <span className="text-slate-400 font-normal text-sm">({activas.length})</span></h2><InvoiceList rows={activas} onOpen={setSelected} /></section>
+      <section><h2 className="text-lg font-semibold text-slate-900 mb-3">Buzon general <span className="text-slate-400 font-normal text-sm">({buzon.filter(i => !i.con_oc).length})</span></h2><InvoiceList rows={buzon.filter(i => !i.con_oc)} onOpen={setSelected} /></section>
       <section><h2 className="text-lg font-semibold text-slate-900 mb-3">Historial <span className="text-slate-400 font-normal text-sm">({historial.length})</span></h2><InvoiceList rows={historial} onOpen={setSelected} showState /></section>
       {selected && <InvoiceForm invoice={selected} siblings={activas.concat(buzon).filter((v,i,a)=>a.findIndex(x=>x.id===v.id)===i)} costCenters={costCenters} buyers={buyersList} currentProfile={acting} realProfile={profile} roles={actingRoles} viewAs="comprador" onSave={reloadAll} onClose={() => setSelected(null)} onNavigate={setSelected} />}
     </div>
