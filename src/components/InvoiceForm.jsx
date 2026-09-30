@@ -255,6 +255,8 @@ export function InvoiceForm({ invoice, siblings, costCenters, buyers, currentPro
           )}
           {showAdminActions && (state === 'con_admin' || (state === 'en_buzon' && form.con_oc)) && (
             <>
+              <select value={assignBuyer} onChange={e => setAssignBuyer(e.target.value)} className="border rounded px-2 py-1"><option value="">Derivar a comprador...</option>{buyers.map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}</select>
+              <button disabled={!assignBuyer || saving} onClick={() => save('con_comprador', { buyer_id: assignBuyer })} className="px-4 py-2 bg-amber-500 text-white rounded font-medium disabled:opacity-50">Derivar</button>
               <button disabled={saving} onClick={() => save('aprobada')} className="px-4 py-2 bg-emerald-600 text-white rounded font-medium">Aprobar</button>
               <input placeholder="Motivo rechazo" value={bounceReason} onChange={e => setBounceReason(e.target.value)} className="border rounded px-2 py-1" />
               <button disabled={!bounceReason || saving} onClick={() => save('rechazada', { bounce_reason: bounceReason })} className="px-4 py-2 bg-rose-600 text-white rounded font-medium disabled:opacity-50">Rechazar</button>
@@ -433,22 +435,26 @@ function PendingConcepts({ invoiceId, onChanged }) {
   );
 }
 
-function EventsHistory({ events }) {  if (!events || events.length === 0) return null;
+function EventsHistory({ events }) {
+  if (!events || events.length === 0) return null;
   const fmt = ts => {
     try { return new Date(ts).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
     catch { return ts; }
   };
   return (
     <div className="mt-4 border-t pt-3">
-      <div className="text-[11px] uppercase text-slate-500 tracking-wide mb-2">Historial</div>
-      <ol className="space-y-1.5">
+      <div className="text-[11px] uppercase text-slate-500 tracking-wide mb-2">Historial de la factura</div>
+      <ol className="space-y-2">
         {events.map(ev => (
           <li key={ev.id} className="flex items-start gap-2 text-xs">
-            <span className="text-slate-400 tabular-nums flex-shrink-0 w-24">{fmt(ev.created_at)}</span>
-            <StateBadgeInline state={ev.action} />
-            <div className="flex-1 min-w-0 text-slate-700">
-              <span className="text-slate-500">{ev.actor?.nombre || ''}</span>
-              {ev.note && <span className="text-slate-500"> — {ev.note}</span>}
+            <span className="text-slate-400 tabular-nums flex-shrink-0 w-20">{fmt(ev.created_at)}</span>
+            <div className="flex-1 min-w-0 space-y-0.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <StateBadgeInline state={ev.action} />
+                <span className="text-slate-700 font-medium">{ACTION_LABELS[ev.action] || ev.action}</span>
+                <span className="text-slate-500">por <b className="text-slate-700">{ev.actor?.nombre || '—'}</b></span>
+              </div>
+              {ev.note && <div className="text-slate-600 italic bg-slate-50 border-l-2 border-slate-300 pl-2 py-0.5">{ev.note}</div>}
             </div>
           </li>
         ))}
