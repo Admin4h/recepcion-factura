@@ -128,17 +128,69 @@ function CompradorPane({ profile, roles }) {
 
 function AdminPane({ profile, roles }) {
   const [sub, setSub] = useState('tablero');
+  const { rows: allInvoices } = useInvoices();
+  const [pendConcepts, setPendConcepts] = useState(0);
+  useEffect(() => {
+    supabase.from('learning_inbox').select('id', { count: 'exact', head: true }).eq('status', 'new').then(({ count }) => setPendConcepts(count || 0));
+  }, [sub]);
+  const buzonCount = allInvoices.filter(i => i.state === 'en_buzon').length;
+  const conAdminCount = allInvoices.filter(i => i.state === 'con_admin').length;
+  const NAV = [
+    { id: 'tablero', label: 'Tablero', icon: '📊' },
+    { id: 'facturas', label: 'Buzón de ingreso', icon: '📥', badge: buzonCount || null },
+    { id: 'verificar-oc', label: 'Verificar OC ref.', icon: '👁', badge: conAdminCount || null, soon: true },
+    { id: 'aprobar-oc', label: 'Aprobar OCs', icon: '✅', soon: true },
+    { id: 'incidentes', label: 'Incidentes', icon: '📋', soon: true },
+    { id: 'pagos', label: 'Pagos', icon: '💳', soon: true },
+    { id: 'cargar-tc', label: 'Cargar sist. TC/Ef', icon: '🗄', soon: true },
+    { id: 'cargar-resto', label: 'Cargar sist. Resto', icon: '🗄', soon: true },
+    { id: 'conceptos', label: 'A clasificar', icon: '✨', badge: pendConcepts || null },
+    { id: 'cashflow', label: 'Bancos', icon: '🏦' },
+    { id: 'config', label: 'Configuración', icon: '⚙️' },
+  ];
+  const active = NAV.find(n => n.id === sub) || NAV[0];
   return (
-    <div>
-      <div className="flex gap-2 mb-4 flex-wrap">
-        {[['tablero','Tablero'],['facturas','Facturas'],['conceptos','Conceptos'],['usuarios','Usuarios'],['centros','Centros de costo'],['cashflow','Bancos']].map(([k, l]) => <button key={k} onClick={() => setSub(k)} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${sub === k ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}`}>{l}</button>)}
+    <div className="flex flex-col md:flex-row gap-4 md:gap-6">
+      <aside className="md:w-60 md:flex-shrink-0">
+        <nav className="bg-white rounded-xl border p-2 space-y-0.5 md:sticky md:top-4">
+          {NAV.map(n => (
+            <button key={n.id} onClick={() => !n.soon && setSub(n.id)} disabled={n.soon} className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-left transition ${sub === n.id ? 'bg-slate-900 text-white' : n.soon ? 'text-slate-400 cursor-not-allowed' : 'text-slate-700 hover:bg-slate-100'}`}>
+              <span className="text-base leading-none w-5">{n.icon}</span>
+              <span className="flex-1 truncate">{n.label}</span>
+              {n.badge != null && <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${sub === n.id ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'}`}>{n.badge}</span>}
+              {n.soon && <span className="text-[9px] uppercase text-slate-400">Pronto</span>}
+            </button>
+          ))}
+        </nav>
+      </aside>
+      <div className="flex-1 min-w-0">
+        <div className="mb-4">
+          <h1 className="text-2xl font-bold text-slate-900">{active.label}</h1>
+          {sub === 'tablero' && <div className="text-sm text-slate-500 mt-0.5">Indicadores para hacer seguimiento del proceso.</div>}
+          {sub === 'conceptos' && <div className="text-sm text-slate-500 mt-0.5">Conceptos que el OCR no supo dónde encajar. Al mapear uno, se aplica a todas las facturas que vengan.</div>}
+        </div>
+        {sub === 'tablero' && <AdminTablero />}
+        {sub === 'facturas' && <AdminFacturas profile={profile} roles={roles} />}
+        {sub === 'conceptos' && <AdminConceptos />}
+        {sub === 'config' && <AdminConfig />}
+        {sub === 'cashflow' && <AdminCashFlow roles={roles} />}
       </div>
-      {sub === 'tablero' && <AdminTablero />}
-      {sub === 'facturas' && <AdminFacturas profile={profile} roles={roles} />}
-      {sub === 'conceptos' && <AdminConceptos />}
-      {sub === 'usuarios' && <AdminUsuarios />}
-      {sub === 'centros' && <AdminCentros />}
-      {sub === 'cashflow' && <AdminCashFlow roles={roles} />}
+    </div>
+  );
+}
+
+// Sub-secciones dentro de Configuración: usuarios y centros de costo (por ahora).
+function AdminConfig() {
+  const [tab, setTab] = useState('usuarios');
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2 border-b">
+        {[['usuarios', 'Usuarios'], ['centros', 'Centros de costo']].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)} className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${tab === k ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
+        ))}
+      </div>
+      {tab === 'usuarios' && <AdminUsuarios />}
+      {tab === 'centros' && <AdminCentros />}
     </div>
   );
 }
@@ -155,19 +207,37 @@ function AdminTablero() {
       const d = i.fecha_emision || i.fecha_gasto || i.created_at?.slice(0,10);
       if (d && d.startsWith(yyyymm) && i.state === 'aprobada') { totalMes += Number(i.total) || 0; cantMes++; }
     }
-    return { c, totalMes, cantMes, yyyymm };
+    const casosAbiertos = (c.en_buzon || 0) + (c.con_comprador || 0) + (c.con_admin || 0);
+    const resueltosMes = cantMes; // aprobadas del mes en curso, aproximacion
+    return { c, totalMes, cantMes, yyyymm, casosAbiertos, resueltosMes };
   }, [all]);
-  const StatCard = ({ label, value, color = 'slate' }) => (
-    <div className="bg-white rounded-xl border p-4"><div className="text-xs uppercase text-slate-500 tracking-wide">{label}</div><div className={`text-2xl font-bold text-${color}-700 mt-1`}>{value}</div></div>
-  );
+  const Card = ({ label, value, icon, tone = 'slate' }) => {
+    const tones = {
+      slate: 'text-slate-900', amber: 'text-amber-700', indigo: 'text-indigo-700',
+      blue: 'text-blue-700', emerald: 'text-emerald-700', rose: 'text-rose-700',
+    };
+    return (
+      <div className="bg-white rounded-xl border p-4 flex items-start justify-between">
+        <div>
+          <div className="text-xs uppercase text-slate-500 tracking-wide">{label}</div>
+          <div className={`text-3xl font-bold mt-1 ${tones[tone]}`}>{value}</div>
+        </div>
+        <span className="text-slate-300 text-2xl leading-none">{icon}</span>
+      </div>
+    );
+  };
   return (
     <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-2 gap-3">
+        <Card label="Casos abiertos" value={stats.casosAbiertos} icon="📥" />
+        <Card label="Resueltos este mes" value={stats.resueltosMes} icon="✅" tone="emerald" />
+      </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <StatCard label="En buzon" value={stats.c.en_buzon || 0} color="amber" />
-        <StatCard label="Con comprador" value={stats.c.con_comprador || 0} color="indigo" />
-        <StatCard label="Con admin" value={stats.c.con_admin || 0} color="blue" />
-        <StatCard label="Aprobadas" value={stats.c.aprobada || 0} color="emerald" />
-        <StatCard label="Rechazadas" value={stats.c.rechazada || 0} color="rose" />
+        <Card label="En buzon" value={stats.c.en_buzon || 0} icon="📥" tone="amber" />
+        <Card label="Con comprador" value={stats.c.con_comprador || 0} icon="👤" tone="indigo" />
+        <Card label="Con admin" value={stats.c.con_admin || 0} icon="⚙️" tone="blue" />
+        <Card label="Aprobadas" value={stats.c.aprobada || 0} icon="✅" tone="emerald" />
+        <Card label="Rechazadas" value={stats.c.rechazada || 0} icon="✕" tone="rose" />
       </div>
       <div className="grid md:grid-cols-2 gap-3">
         <div className="bg-white rounded-xl border p-4">
