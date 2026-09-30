@@ -139,13 +139,11 @@ function AdminPane({ profile, roles }) {
     { id: 'tablero', label: 'Tablero', icon: '📊' },
     { id: 'facturas', label: 'Buzón de ingreso', icon: '📥', badge: buzonCount || null },
     { id: 'verificar-oc', label: 'Verificar OC ref.', icon: '👁', badge: conAdminCount || null, soon: true },
-    { id: 'aprobar-oc', label: 'Aprobar OCs', icon: '✅', soon: true },
     { id: 'incidentes', label: 'Incidentes', icon: '📋', soon: true },
     { id: 'pagos', label: 'Pagos', icon: '💳', soon: true },
     { id: 'cargar-tc', label: 'Cargar sist. TC/Ef', icon: '🗄', soon: true },
     { id: 'cargar-resto', label: 'Cargar sist. Resto', icon: '🗄', soon: true },
     { id: 'conceptos', label: 'A clasificar', icon: '✨', badge: pendConcepts || null },
-    { id: 'cashflow', label: 'Bancos', icon: '🏦' },
     { id: 'config', label: 'Configuración', icon: '⚙️' },
   ];
   const active = NAV.find(n => n.id === sub) || NAV[0];
